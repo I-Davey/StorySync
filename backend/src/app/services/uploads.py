@@ -50,16 +50,22 @@ def _validate_m4b_filename(filename: str | None) -> str:
 def _stream_to_temp(file: UploadFile, storage_root: Path) -> tuple[Path, int, str]:
     digest = hashlib.sha256()
     total_bytes = 0
+    temp_path: Path | None = None
 
-    with tempfile.NamedTemporaryFile(prefix="upload-", suffix=".tmp", dir=storage_root, delete=False) as temp_file:
-        temp_path = Path(temp_file.name)
-        while True:
-            chunk = file.file.read(CHUNK_SIZE)
-            if not chunk:
-                break
-            total_bytes += len(chunk)
-            digest.update(chunk)
-            temp_file.write(chunk)
+    try:
+        with tempfile.NamedTemporaryFile(prefix="upload-", suffix=".tmp", dir=storage_root, delete=False) as temp_file:
+            temp_path = Path(temp_file.name)
+            while True:
+                chunk = file.file.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                digest.update(chunk)
+                temp_file.write(chunk)
+    except Exception:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        raise
 
     return temp_path, total_bytes, digest.hexdigest()
 

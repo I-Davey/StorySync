@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import os
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.exc import IntegrityError
 
-from app.services.uploads import _is_checksum_unique_violation, _stream_to_temp, _validate_m4b_filename
+from app.services.uploads import (
+    _is_checksum_unique_violation,
+    _stream_to_temp,
+    _validate_m4b_filename,
+    handle_upload,
+)
 
 
 class _DummyDiag:
@@ -92,3 +99,42 @@ def test_non_checksum_unique_violation_returns_false() -> None:
     )
 
     assert not _is_checksum_unique_violation(err)
+
+
+def test_stream_to_temp_cleans_up_on_read_error(tmp_path: Path) -> None:
+    """Temp file should be deleted if an error occurs mid-stream."""
+
+    class _BrokenFile:
+        def read(self, n: int) -> bytes:
+            raise OSError("disk full")
+
+    upload = UploadFile(filename="book.m4b", file=_BrokenFile())  # type: ignore[arg-type]
+
+    with pytest.raises(OSError, match="disk full"):
+        _stream_to_temp(upload, tmp_path)
+
+    # No stray temp files should remain
+    assert list(tmp_path.glob("upload-*.tmp")) == []
+
+
+def test_handle_upload_409_on_checksum_duplicate_and_file_deleted(tmp_path: Path) -> None:
+    """IntegrityError on checksum duplicate → HTTP 409 and the moved file is cleaned up."""
+    payload = b"audio data"
+    upload = UploadFile(filename="book.m4b", file=BytesIO(payload))
+
+    dup_orig = _DummyOrig(diag=_DummyDiag(constraint_name="audiobooks_checksum_sha256_key"))
+    integrity_err = _integrity_error(dup_orig)
+
+    db = MagicMock()
+    db.flush.side_effect = integrity_err
+
+    with patch("app.services.uploads.settings") as mock_settings:
+        mock_settings.audio_storage_root = str(tmp_path)
+        with pytest.raises(HTTPException) as exc_info:
+            handle_upload(db, upload)
+
+    assert exc_info.value.status_code == 409
+    assert "Duplicate" in exc_info.value.detail
+
+    # The final .m4b file must have been removed
+    assert list(tmp_path.glob("*.m4b")) == []
