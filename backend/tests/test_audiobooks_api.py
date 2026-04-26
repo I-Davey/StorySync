@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from io import BytesIO
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
@@ -27,7 +27,7 @@ def test_upload_endpoint_returns_created_payload(monkeypatch) -> None:
         return expected
 
     monkeypatch.setattr("app.api.audiobooks.handle_upload", fake_handle_upload)
-    monkeypatch.setattr("app.main.initialize_schema", lambda: None)
+    monkeypatch.setattr("app.main.initialize_schema", MagicMock())
     app.dependency_overrides[get_db] = lambda: None
 
     try:
