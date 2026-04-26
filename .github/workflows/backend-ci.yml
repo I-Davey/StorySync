@@ -1,23 +1,37 @@
 name: Backend CI
 
 on:
-  push:
-    paths:
-      - "backend/**"
-      - ".github/workflows/backend-ci.yml"
   pull_request:
+    branches:
+      - main
     paths:
-      - "backend/**"
+      - "backend/**/*.py"
+      - "backend/pyproject.toml"
+      - "backend/.env.example"
       - ".github/workflows/backend-ci.yml"
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: storysync_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d storysync_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: backend
     env:
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/storysync_test
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/storysync_test
       AUDIO_STORAGE_ROOT: /tmp/storysync-test-audio
       PROCESSOR_ENABLED: "false"
     steps:
@@ -31,6 +45,23 @@ jobs:
 
       - name: Install dependencies
         run: pip install -e .[dev]
+
+      - name: Wait for Postgres
+        run: |
+          python - <<'PY'
+          import time
+          import psycopg
+
+          dsn = "host=127.0.0.1 port=5432 dbname=storysync_test user=postgres password=postgres"
+          for attempt in range(30):
+              try:
+                  with psycopg.connect(dsn):
+                      break
+              except Exception:
+                  if attempt == 29:
+                      raise
+                  time.sleep(1)
+          PY
 
       - name: Lint (compile check)
         run: python -m compileall src tests
