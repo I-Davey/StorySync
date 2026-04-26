@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
+import time
 
 from app.services import processor
 
@@ -139,3 +140,47 @@ def test_complete_job_failure_marks_failed_when_attempts_exhausted(monkeypatch) 
     assert job.lease_expires_at is None
     assert job.last_error == "fatal"
     assert db.commits == 1
+
+
+def test_execute_with_heartbeat_runs_until_work_completes(monkeypatch) -> None:
+    heartbeat_calls = {"count": 0}
+
+    class _CtxDB:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr("app.services.processor.settings.processor_heartbeat_interval_seconds", 0.01)
+    monkeypatch.setattr("app.services.processor.settings.processor_lease_seconds", 1)
+    monkeypatch.setattr("app.services.processor.SessionLocal", lambda: _CtxDB())
+
+    def _heartbeat(_db, _job_id, _worker_id):
+        heartbeat_calls["count"] += 1
+        return True
+
+    monkeypatch.setattr("app.services.processor.heartbeat_job", _heartbeat)
+
+    ok = processor._execute_with_heartbeat(uuid.uuid4(), "worker-1", work_fn=lambda: time.sleep(0.25))
+
+    assert ok
+    assert heartbeat_calls["count"] >= 1
+
+
+def test_execute_with_heartbeat_reports_lease_loss(monkeypatch) -> None:
+    class _CtxDB:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr("app.services.processor.settings.processor_heartbeat_interval_seconds", 0.01)
+    monkeypatch.setattr("app.services.processor.settings.processor_lease_seconds", 1)
+    monkeypatch.setattr("app.services.processor.SessionLocal", lambda: _CtxDB())
+    monkeypatch.setattr("app.services.processor.heartbeat_job", lambda _db, _job_id, _worker_id: False)
+
+    ok = processor._execute_with_heartbeat(uuid.uuid4(), "worker-1", work_fn=lambda: time.sleep(0.25))
+
+    assert not ok

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select, update
@@ -156,6 +157,37 @@ def process_claimed_job(_db: Session, _job: ProcessingJob, _worker_id: str) -> N
     """
 
 
+def _run_claimed_job_work(job: ProcessingJob, worker_id: str) -> None:
+    with SessionLocal() as db:
+        process_claimed_job(db, job, worker_id)
+
+
+def _execute_with_heartbeat(job_id: uuid.UUID, worker_id: str, work_fn: Callable[[], None]) -> bool:
+    heartbeat_interval = max(settings.processor_heartbeat_interval_seconds, 0.1)
+    lease_window = max(settings.processor_lease_seconds, 1)
+    safe_interval = min(heartbeat_interval, max(lease_window / 2, 0.1))
+    stop_event = threading.Event()
+    lease_lost = threading.Event()
+
+    def _heartbeat_loop() -> None:
+        while not stop_event.wait(safe_interval):
+            with SessionLocal() as db:
+                if not heartbeat_job(db, job_id, worker_id):
+                    lease_lost.set()
+                    stop_event.set()
+                    return
+
+    heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+    heartbeat_thread.start()
+    try:
+        work_fn()
+    finally:
+        stop_event.set()
+        heartbeat_thread.join(timeout=safe_interval + 1.0)
+
+    return not lease_lost.is_set()
+
+
 def run_processor_iteration(worker_id: str) -> None:
     with SessionLocal() as db:
         recovered = recover_expired_leases(db)
@@ -170,14 +202,14 @@ def run_processor_iteration(worker_id: str) -> None:
             return
 
         try:
-            with SessionLocal() as db:
-                ok = heartbeat_job(db, job.id, worker_id)
-                if not ok:
-                    logger.warning("Lost lease while heartbeating job %s", job.id)
-                    continue
-
-            with SessionLocal() as db:
-                process_claimed_job(db, job, worker_id)
+            lease_ok = _execute_with_heartbeat(
+                job.id,
+                worker_id,
+                work_fn=lambda: _run_claimed_job_work(job, worker_id),
+            )
+            if not lease_ok:
+                logger.warning("Lost lease while processing job %s", job.id)
+                continue
 
             with SessionLocal() as db:
                 complete_job_success(db, job.id, worker_id)
