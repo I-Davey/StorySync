@@ -1,6 +1,6 @@
 # StorySync Backend
 
-## Phase 2 status
+## Phase 3 status
 This directory now includes:
 - FastAPI application bootstrap
 - PostgreSQL connection wiring
@@ -10,6 +10,10 @@ This directory now includes:
 - streamed storage writes to `audio_storage_root`
 - SHA256 checksum persistence + duplicate conflict handling
 - processing job creation with `received` -> `queued` transition
+- deterministic queue-position assignment when jobs are queued
+- `GET /jobs/{job_id}` queue lifecycle lookup
+- `GET /audiobooks/{id}` audiobook + current job lookup
+- `GET /audiobooks` with pagination and optional `state` filter
 
 ## Run
 ```bash

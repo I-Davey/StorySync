@@ -138,3 +138,18 @@ def test_handle_upload_409_on_checksum_duplicate_and_file_deleted(tmp_path: Path
 
     # The final .m4b file must have been removed
     assert list(tmp_path.glob("*.m4b")) == []
+
+
+def test_handle_upload_assigns_next_queue_position(tmp_path: Path) -> None:
+    payload = b"audio data"
+    upload = UploadFile(filename="book.m4b", file=BytesIO(payload))
+
+    db = MagicMock()
+    db.query.return_value.scalar_one.return_value = 42
+
+    with patch("app.services.uploads.settings") as mock_settings:
+        mock_settings.audio_storage_root = str(tmp_path)
+        result = handle_upload(db, upload)
+
+    assert result.queue_position == 42
+    assert result.job_state == "queued"
