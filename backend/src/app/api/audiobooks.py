@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -70,8 +70,6 @@ def upload_audiobook(file: UploadFile = File(...), db: Session = Depends(get_db)
 def get_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> AudiobookResponse:
     audiobook = db.get(Audiobook, audiobook_id)
     if audiobook is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="Audiobook not found")
 
     job = db.execute(select(ProcessingJob).where(ProcessingJob.audiobook_id == audiobook.id)).scalar_one_or_none()

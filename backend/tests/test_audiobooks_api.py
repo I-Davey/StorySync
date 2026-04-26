@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import uuid
 from io import BytesIO
+from unittest.mock import patch
 
-from fastapi import UploadFile
+from fastapi.testclient import TestClient
 
-from app.api.audiobooks import upload_audiobook
+from app.db import get_db
+from app.main import app
 from app.services.uploads import UploadResult
 
 
@@ -18,16 +20,28 @@ def test_upload_endpoint_returns_created_payload(monkeypatch) -> None:
         checksum_sha256="a" * 64,
         job_id=uuid.uuid4(),
         job_state="queued",
+        queue_position=3,
     )
 
     def fake_handle_upload(db, file):
         return expected
 
     monkeypatch.setattr("app.api.audiobooks.handle_upload", fake_handle_upload)
+    monkeypatch.setattr("app.main.initialize_schema", lambda: None)
+    app.dependency_overrides[get_db] = lambda: None
 
-    payload = UploadFile(filename="book.m4b", file=BytesIO(b"payload"))
-    response = upload_audiobook(file=payload, db=object())
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/audiobooks/upload",
+                files={"file": ("book.m4b", BytesIO(b"payload"), "audio/x-m4b")},
+            )
+    finally:
+        app.dependency_overrides.clear()
 
-    assert response.audiobook_id == expected.audiobook_id
-    assert response.job_id == expected.job_id
-    assert response.job_state == "queued"
+    assert response.status_code == 201
+    data = response.json()
+    assert data["audiobook_id"] == str(expected.audiobook_id)
+    assert data["job_id"] == str(expected.job_id)
+    assert data["job_state"] == "queued"
+    assert data["queue_position"] == 3
