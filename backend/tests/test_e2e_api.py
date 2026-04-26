@@ -1,104 +1,180 @@
 from __future__ import annotations
 
+import os
+import socket
+import subprocess
+import sys
+import time
 from io import BytesIO
 from pathlib import Path
 
+import httpx
+import psycopg
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy import create_engine
 
-from app.db import get_db
-from app.main import app
 from app.models import Base
 
 
-@pytest.fixture
-def sqlite_session_factory(tmp_path: Path):
-    engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _wait_for_postgres(database_url: str, timeout_seconds: float = 30.0) -> bool:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        try:
+            with psycopg.connect(database_url):
+                return True
+        except psycopg.Error:
+            time.sleep(0.5)
+    return False
+
+
+@pytest.fixture(scope="session")
+def postgres_database_url() -> str:
+    return os.environ.get(
+        "DATABASE_URL",
+        "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/storysync_test",
     )
 
-    @event.listens_for(engine, "connect")
-    def _register_pg_advisory_lock(dbapi_connection, _connection_record) -> None:  # noqa: ANN001
-        dbapi_connection.create_function("pg_advisory_xact_lock", 1, lambda _key: 1)
 
+@pytest.fixture(scope="session")
+def postgres_ready(postgres_database_url: str) -> str:
+    if not _wait_for_postgres(postgres_database_url):
+        pytest.skip("PostgreSQL is required for live e2e tests.")
+    return postgres_database_url
+
+
+@pytest.fixture
+def reset_postgres_schema(postgres_ready: str) -> None:
+    engine = create_engine(postgres_ready, pool_pre_ping=True)
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
-    factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-
     try:
-        yield factory
+        yield
     finally:
         Base.metadata.drop_all(bind=engine)
         engine.dispose()
 
 
 @pytest.fixture
-def e2e_client(monkeypatch, tmp_path: Path, sqlite_session_factory):
-    monkeypatch.setattr("app.main.initialize_schema", lambda: None)
-    monkeypatch.setattr("app.main.settings.processor_enabled", False)
-    monkeypatch.setattr("app.services.uploads.settings.audio_storage_root", str(tmp_path))
+def live_backend_server(postgres_ready: str, reset_postgres_schema, tmp_path: Path):
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
 
-    def _get_db_override():
-        db: Session = sqlite_session_factory()
-        try:
-            yield db
-        finally:
-            db.close()
+    port = _free_port()
+    base_url = f"http://127.0.0.1:{port}"
 
-    app.dependency_overrides[get_db] = _get_db_override
+    env = os.environ.copy()
+    env["DATABASE_URL"] = postgres_ready
+    env["AUDIO_STORAGE_ROOT"] = str(audio_dir)
+    env["PROCESSOR_ENABLED"] = "false"
+
+    process = subprocess.Popen(  # noqa: S603
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--app-dir",
+            "src",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=str(Path(__file__).resolve().parents[1]),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
     try:
-        with TestClient(app) as client:
-            yield client
+        with httpx.Client(timeout=1.0) as client:
+            for _ in range(60):
+                if process.poll() is not None:
+                    stderr_output = process.stderr.read() if process.stderr else ""
+                    raise RuntimeError(f"Backend failed to start. stderr:\n{stderr_output}")
+                try:
+                    health = client.get(f"{base_url}/health")
+                    if health.status_code == 200:
+                        break
+                except httpx.HTTPError:
+                    time.sleep(0.25)
+            else:
+                raise RuntimeError("Timed out waiting for backend /health endpoint.")
+
+        yield base_url, audio_dir
     finally:
-        app.dependency_overrides.clear()
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
 
 
-def test_e2e_upload_then_fetch_job_and_audiobook(e2e_client: TestClient, generated_m4b_payload: bytes) -> None:
-    upload_response = e2e_client.post(
-        "/audiobooks/upload",
-        files={"file": ("full-flow.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
-    )
-    assert upload_response.status_code == 201
+def test_e2e_live_upload_then_fetch_job_and_audiobook(
+    live_backend_server,
+    generated_m4b_payload: bytes,
+) -> None:
+    base_url, audio_dir = live_backend_server
 
-    uploaded = upload_response.json()
-    stored_path = Path(uploaded["stored_path"])
-    assert stored_path.exists()
-    assert stored_path.read_bytes() == generated_m4b_payload
+    with httpx.Client(timeout=10.0) as client:
+        upload_response = client.post(
+            f"{base_url}/audiobooks/upload",
+            files={"file": ("live-flow.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
+        )
+        assert upload_response.status_code == 201
 
-    job_response = e2e_client.get(f"/jobs/{uploaded['job_id']}")
-    assert job_response.status_code == 200
-    assert job_response.json()["state"] == "queued"
+        uploaded = upload_response.json()
+        stored_path = Path(uploaded["stored_path"])
+        assert stored_path.exists()
+        assert stored_path.parent == audio_dir
+        assert stored_path.read_bytes() == generated_m4b_payload
 
-    audiobook_response = e2e_client.get(f"/audiobooks/{uploaded['audiobook_id']}")
-    assert audiobook_response.status_code == 200
-    audiobook = audiobook_response.json()
-    assert audiobook["original_filename"] == "full-flow.m4b"
-    assert audiobook["job"]["id"] == uploaded["job_id"]
-    assert audiobook["job"]["state"] == "queued"
+        job_response = client.get(f"{base_url}/jobs/{uploaded['job_id']}")
+        assert job_response.status_code == 200
+        assert job_response.json()["state"] == "queued"
 
-    list_response = e2e_client.get("/audiobooks", params={"state": "queued", "page": 1, "page_size": 10})
-    assert list_response.status_code == 200
-    listed = list_response.json()
-    assert listed["page"] == 1
-    assert listed["page_size"] == 10
-    assert len(listed["items"]) == 1
-    assert listed["items"][0]["id"] == uploaded["audiobook_id"]
+        audiobook_response = client.get(f"{base_url}/audiobooks/{uploaded['audiobook_id']}")
+        assert audiobook_response.status_code == 200
+        audiobook = audiobook_response.json()
+        assert audiobook["original_filename"] == "live-flow.m4b"
+        assert audiobook["job"]["id"] == uploaded["job_id"]
+        assert audiobook["job"]["state"] == "queued"
+
+        list_response = client.get(
+            f"{base_url}/audiobooks",
+            params={"state": "queued", "page": 1, "page_size": 10},
+        )
+        assert list_response.status_code == 200
+        listed = list_response.json()
+        assert listed["page"] == 1
+        assert listed["page_size"] == 10
+        assert len(listed["items"]) == 1
+        assert listed["items"][0]["id"] == uploaded["audiobook_id"]
 
 
-def test_e2e_duplicate_upload_returns_conflict(e2e_client: TestClient, generated_m4b_payload: bytes) -> None:
-    first = e2e_client.post(
-        "/audiobooks/upload",
-        files={"file": ("dup-a.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
-    )
-    assert first.status_code == 201
+def test_e2e_live_duplicate_upload_returns_conflict(
+    live_backend_server,
+    generated_m4b_payload: bytes,
+) -> None:
+    base_url, _audio_dir = live_backend_server
 
-    second = e2e_client.post(
-        "/audiobooks/upload",
-        files={"file": ("dup-b.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
-    )
-    assert second.status_code == 409
-    assert "Duplicate upload detected" in second.json()["detail"]
+    with httpx.Client(timeout=10.0) as client:
+        first = client.post(
+            f"{base_url}/audiobooks/upload",
+            files={"file": ("dup-a.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
+        )
+        assert first.status_code == 201
+
+        second = client.post(
+            f"{base_url}/audiobooks/upload",
+            files={"file": ("dup-b.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
+        )
+        assert second.status_code == 409
+        assert "Duplicate upload detected" in second.json()["detail"]
