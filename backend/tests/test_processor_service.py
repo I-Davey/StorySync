@@ -39,6 +39,18 @@ class _FakeDB:
         self.refresh_calls.append(obj)
 
 
+class _FakeDBForProcess:
+    def __init__(self, audiobook):
+        self.audiobook = audiobook
+        self.commits = 0
+
+    def execute(self, _stmt):
+        return _ExecuteResult(one=self.audiobook)
+
+    def commit(self):
+        self.commits += 1
+
+
 def test_claim_next_job_sets_processing_and_lease(monkeypatch) -> None:
     job = SimpleNamespace(
         id=uuid.uuid4(),
@@ -184,3 +196,46 @@ def test_execute_with_heartbeat_reports_lease_loss(monkeypatch) -> None:
     ok = processor._execute_with_heartbeat(uuid.uuid4(), "worker-1", work_fn=lambda: time.sleep(0.25))
 
     assert not ok
+
+
+def test_process_claimed_job_extracts_and_persists_metadata(monkeypatch) -> None:
+    audiobook = SimpleNamespace(
+        id=uuid.uuid4(),
+        stored_path="/data/audio/book.m4b",
+        metadata_title=None,
+        metadata_album=None,
+        metadata_artist=None,
+        metadata_genre=None,
+        metadata_duration_seconds=None,
+        metadata_track_number=None,
+        metadata_year=None,
+        metadata_raw=None,
+    )
+    job = SimpleNamespace(id=uuid.uuid4(), audiobook_id=audiobook.id)
+    db = _FakeDBForProcess(audiobook)
+
+    monkeypatch.setattr(
+        "app.services.processor.extract_m4b_metadata",
+        lambda _path: SimpleNamespace(
+            title="Title",
+            album="Album",
+            artist="Artist",
+            genre="Genre",
+            duration_seconds=123,
+            track_number=4,
+            year=2024,
+            raw={"k": "v"},
+        ),
+    )
+
+    processor.process_claimed_job(db, job, "worker-1")
+
+    assert audiobook.metadata_title == "Title"
+    assert audiobook.metadata_album == "Album"
+    assert audiobook.metadata_artist == "Artist"
+    assert audiobook.metadata_genre == "Genre"
+    assert audiobook.metadata_duration_seconds == 123
+    assert audiobook.metadata_track_number == 4
+    assert audiobook.metadata_year == 2024
+    assert audiobook.metadata_raw == {"k": "v"}
+    assert db.commits == 1
