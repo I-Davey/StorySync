@@ -39,6 +39,8 @@ def test_get_job_endpoint_returns_job() -> None:
             state="queued",
             queue_position=7,
             attempt_count=0,
+            worker_id=None,
+            lease_expires_at=None,
             last_error=None,
         )
     )
@@ -65,6 +67,8 @@ def test_list_audiobooks_supports_state_filter_query_param() -> None:
         state="queued",
         queue_position=1,
         attempt_count=0,
+        worker_id=None,
+        lease_expires_at=None,
         last_error=None,
     )
     db = _DummyDB(list_rows=[(audiobook, job)])

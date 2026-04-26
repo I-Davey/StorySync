@@ -32,6 +32,8 @@ class JobResponse(BaseModel):
     state: str
     queue_position: int | None
     attempt_count: int
+    worker_id: str | None = None
+    lease_expires_at: datetime | None = None
     last_error: str | None = None
 
 
@@ -87,6 +89,8 @@ def get_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> Aud
                 state=job.state,
                 queue_position=job.queue_position,
                 attempt_count=job.attempt_count,
+                worker_id=job.worker_id,
+                lease_expires_at=job.lease_expires_at,
                 last_error=job.last_error,
             )
             if job
@@ -123,6 +127,8 @@ def list_audiobooks(
                 state=j.state,
                 queue_position=j.queue_position,
                 attempt_count=j.attempt_count,
+                worker_id=j.worker_id,
+                lease_expires_at=j.lease_expires_at,
                 last_error=j.last_error,
             ),
         )
