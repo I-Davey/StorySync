@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile, status
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -29,6 +30,7 @@ class UploadResult:
     checksum_sha256: str
     job_id: uuid.UUID
     job_state: str
+    queue_position: int | None = None
 
 
 def _validate_m4b_filename(filename: str | None) -> str:
@@ -114,7 +116,11 @@ def handle_upload(db: Session, file: UploadFile) -> UploadResult:
         db.add(job)
         db.flush()
 
+        db.execute(select(func.pg_advisory_xact_lock(730001)))
+        next_queue_position = db.scalar(select(func.coalesce(func.max(ProcessingJob.queue_position), 0) + 1))
+
         job.state = "queued"
+        job.queue_position = int(next_queue_position)
         db.commit()
         db.refresh(audiobook)
         db.refresh(job)
@@ -127,6 +133,7 @@ def handle_upload(db: Session, file: UploadFile) -> UploadResult:
             checksum_sha256=audiobook.checksum_sha256,
             job_id=job.id,
             job_state=job.state,
+            queue_position=job.queue_position,
         )
     except IntegrityError as exc:
         db.rollback()
