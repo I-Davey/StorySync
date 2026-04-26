@@ -89,6 +89,14 @@ def test_checksum_violation_detected_by_sqlstate_and_detail() -> None:
     assert _is_checksum_unique_violation(err)
 
 
+
+
+def test_checksum_violation_detected_for_sqlite_message_text() -> None:
+    err = _integrity_error(_DummyOrig(text="UNIQUE constraint failed: audiobooks.checksum_sha256"))
+
+    assert _is_checksum_unique_violation(err)
+
+
 def test_non_checksum_unique_violation_returns_false() -> None:
     err = _integrity_error(
         _DummyOrig(
@@ -117,9 +125,9 @@ def test_stream_to_temp_cleans_up_on_read_error(tmp_path: Path) -> None:
     assert list(tmp_path.glob("upload-*.tmp")) == []
 
 
-def test_handle_upload_409_on_checksum_duplicate_and_file_deleted(tmp_path: Path) -> None:
+def test_handle_upload_409_on_checksum_duplicate_and_file_deleted(tmp_path: Path, generated_m4b_payload: bytes) -> None:
     """IntegrityError on checksum duplicate → HTTP 409 and the moved file is cleaned up."""
-    payload = b"audio data"
+    payload = generated_m4b_payload
     upload = UploadFile(filename="book.m4b", file=BytesIO(payload))
 
     dup_orig = _DummyOrig(diag=_DummyDiag(constraint_name="audiobooks_checksum_sha256_key"))
@@ -140,8 +148,8 @@ def test_handle_upload_409_on_checksum_duplicate_and_file_deleted(tmp_path: Path
     assert list(tmp_path.glob("*.m4b")) == []
 
 
-def test_handle_upload_assigns_next_queue_position(tmp_path: Path) -> None:
-    payload = b"audio data"
+def test_handle_upload_assigns_next_queue_position(tmp_path: Path, generated_m4b_payload: bytes) -> None:
+    payload = generated_m4b_payload
     upload = UploadFile(filename="book.m4b", file=BytesIO(payload))
 
     db = MagicMock()
