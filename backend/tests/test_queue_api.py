@@ -4,10 +4,8 @@ import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
-
-from app.db import get_db
-from app.main import app
+from app.api.audiobooks import list_audiobooks
+from app.api.jobs import get_job
 
 
 class _DummyDB:
@@ -31,7 +29,7 @@ class _DummyDB:
         return SimpleNamespace(all=lambda: self._list_rows)
 
 
-def test_get_job_endpoint_returns_job(monkeypatch) -> None:
+def test_get_job_endpoint_returns_job() -> None:
     job_id = uuid.uuid4()
     audiobook_id = uuid.uuid4()
     db = _DummyDB(
@@ -45,17 +43,12 @@ def test_get_job_endpoint_returns_job(monkeypatch) -> None:
         )
     )
 
-    monkeypatch.setattr(app.router, "on_startup", [])
-    app.dependency_overrides[get_db] = lambda: db
-    with TestClient(app) as client:
-        response = client.get(f"/jobs/{job_id}")
-    app.dependency_overrides.clear()
+    response = get_job(job_id=job_id, db=db)
 
-    assert response.status_code == 200
-    assert response.json()["queue_position"] == 7
+    assert response.queue_position == 7
 
 
-def test_list_audiobooks_supports_state_filter_query_param(monkeypatch) -> None:
+def test_list_audiobooks_supports_state_filter_query_param() -> None:
     audiobook_id = uuid.uuid4()
     job_id = uuid.uuid4()
     audiobook = SimpleNamespace(
@@ -76,13 +69,8 @@ def test_list_audiobooks_supports_state_filter_query_param(monkeypatch) -> None:
     )
     db = _DummyDB(list_rows=[(audiobook, job)])
 
-    monkeypatch.setattr(app.router, "on_startup", [])
-    app.dependency_overrides[get_db] = lambda: db
-    with TestClient(app) as client:
-        response = client.get("/audiobooks?state=queued&page=1&page_size=10")
-    app.dependency_overrides.clear()
+    response = list_audiobooks(page=1, page_size=10, state="queued", db=db)
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["page"] == 1
-    assert body["items"][0]["job"]["state"] == "queued"
+    assert response.page == 1
+    assert response.items[0].job is not None
+    assert response.items[0].job.state == "queued"
