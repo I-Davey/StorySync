@@ -1,6 +1,6 @@
 # StorySync Backend
 
-## Phase 4 status
+## Phase 5 status
 This directory now includes:
 - FastAPI application bootstrap
 - PostgreSQL connection wiring
@@ -17,6 +17,8 @@ This directory now includes:
 - background processing loop for queued jobs
 - lease/heartbeat support with restart-safe lease expiration recovery
 - processing completion transitions to `processed` or `failed`/re-queued
+- M4B metadata extraction during processing (`title`, `album`, `artist`, `genre`, `duration`, `track`, `year`)
+- extracted metadata persisted in normalized audiobook columns plus `metadata_raw` payload
 
 ## Run
 ```bash

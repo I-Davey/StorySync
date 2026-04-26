@@ -59,6 +59,14 @@ def test_list_audiobooks_supports_state_filter_query_param() -> None:
         stored_path="/data/audio/book.m4b",
         file_size_bytes=321,
         checksum_sha256="a" * 64,
+        metadata_title="My Book",
+        metadata_album=None,
+        metadata_artist=None,
+        metadata_genre=None,
+        metadata_duration_seconds=None,
+        metadata_track_number=None,
+        metadata_year=None,
+        metadata_raw=None,
         created_at=datetime.now(timezone.utc),
     )
     job = SimpleNamespace(

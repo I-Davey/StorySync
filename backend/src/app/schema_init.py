@@ -10,7 +10,7 @@ def initialize_schema() -> None:
     with SessionLocal() as session:
         stmt = (
             insert(AppMeta)
-            .values(key="schema_version", value="1")
+            .values(key="schema_version", value="5")
             .on_conflict_do_nothing(index_elements=["key"])
         )
         session.execute(stmt)

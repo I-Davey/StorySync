@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import ProcessingJob
+from app.models import Audiobook, ProcessingJob
+from app.services.metadata import extract_m4b_metadata
 
 logger = logging.getLogger(__name__)
 QUEUE_LOCK_KEY = 730001
@@ -150,11 +151,21 @@ def complete_job_failure(
     return True
 
 
-def process_claimed_job(_db: Session, _job: ProcessingJob, _worker_id: str) -> None:
-    """Placeholder processing implementation for Phase 4.
+def process_claimed_job(db: Session, job: ProcessingJob, _worker_id: str) -> None:
+    audiobook = db.execute(select(Audiobook).where(Audiobook.id == job.audiobook_id)).scalar_one_or_none()
+    if audiobook is None:
+        raise RuntimeError(f"Audiobook not found for job {job.id}")
 
-    Phase 5 will replace this with real metadata extraction/transformation work.
-    """
+    metadata = extract_m4b_metadata(audiobook.stored_path)
+    audiobook.metadata_title = metadata.title
+    audiobook.metadata_album = metadata.album
+    audiobook.metadata_artist = metadata.artist
+    audiobook.metadata_genre = metadata.genre
+    audiobook.metadata_duration_seconds = metadata.duration_seconds
+    audiobook.metadata_track_number = metadata.track_number
+    audiobook.metadata_year = metadata.year
+    audiobook.metadata_raw = metadata.raw
+    db.commit()
 
 
 def _run_claimed_job_work(job: ProcessingJob, worker_id: str) -> None:

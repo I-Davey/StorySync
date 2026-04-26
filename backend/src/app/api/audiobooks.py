@@ -43,6 +43,14 @@ class AudiobookResponse(BaseModel):
     stored_path: str
     file_size_bytes: int
     checksum_sha256: str
+    metadata_title: str | None = None
+    metadata_album: str | None = None
+    metadata_artist: str | None = None
+    metadata_genre: str | None = None
+    metadata_duration_seconds: int | None = None
+    metadata_track_number: int | None = None
+    metadata_year: int | None = None
+    metadata_raw: dict | None = None
     created_at: datetime
     job: JobResponse | None = None
 
@@ -81,6 +89,14 @@ def get_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> Aud
         stored_path=audiobook.stored_path,
         file_size_bytes=audiobook.file_size_bytes,
         checksum_sha256=audiobook.checksum_sha256,
+        metadata_title=audiobook.metadata_title,
+        metadata_album=audiobook.metadata_album,
+        metadata_artist=audiobook.metadata_artist,
+        metadata_genre=audiobook.metadata_genre,
+        metadata_duration_seconds=audiobook.metadata_duration_seconds,
+        metadata_track_number=audiobook.metadata_track_number,
+        metadata_year=audiobook.metadata_year,
+        metadata_raw=audiobook.metadata_raw,
         created_at=audiobook.created_at,
         job=(
             JobResponse(
@@ -120,6 +136,14 @@ def list_audiobooks(
             stored_path=a.stored_path,
             file_size_bytes=a.file_size_bytes,
             checksum_sha256=a.checksum_sha256,
+            metadata_title=a.metadata_title,
+            metadata_album=a.metadata_album,
+            metadata_artist=a.metadata_artist,
+            metadata_genre=a.metadata_genre,
+            metadata_duration_seconds=a.metadata_duration_seconds,
+            metadata_track_number=a.metadata_track_number,
+            metadata_year=a.metadata_year,
+            metadata_raw=a.metadata_raw,
             created_at=a.created_at,
             job=JobResponse(
                 id=j.id,

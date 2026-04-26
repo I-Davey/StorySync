@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import JSON, BigInteger, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -33,6 +33,14 @@ class Audiobook(Base):
     stored_path: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     file_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    metadata_title: Mapped[str | None] = mapped_column(Text)
+    metadata_album: Mapped[str | None] = mapped_column(Text)
+    metadata_artist: Mapped[str | None] = mapped_column(Text)
+    metadata_genre: Mapped[str | None] = mapped_column(Text)
+    metadata_duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    metadata_track_number: Mapped[int | None] = mapped_column(Integer)
+    metadata_year: Mapped[int | None] = mapped_column(Integer)
+    metadata_raw: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
