@@ -11,7 +11,7 @@ from app.main import app
 from app.services.uploads import UploadResult
 
 
-def test_upload_endpoint_returns_created_payload(monkeypatch) -> None:
+def test_upload_endpoint_returns_created_payload(monkeypatch, generated_m4b_payload: bytes) -> None:
     expected = UploadResult(
         audiobook_id=uuid.uuid4(),
         original_filename="book.m4b",
@@ -35,7 +35,7 @@ def test_upload_endpoint_returns_created_payload(monkeypatch) -> None:
         with TestClient(app) as client:
             response = client.post(
                 "/audiobooks/upload",
-                files={"file": ("book.m4b", BytesIO(b"payload"), "audio/x-m4b")},
+                files={"file": ("book.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
             )
     finally:
         app.dependency_overrides.clear()
