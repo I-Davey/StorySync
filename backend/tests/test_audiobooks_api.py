@@ -28,6 +28,7 @@ def test_upload_endpoint_returns_created_payload(monkeypatch) -> None:
 
     monkeypatch.setattr("app.api.audiobooks.handle_upload", fake_handle_upload)
     monkeypatch.setattr("app.main.initialize_schema", MagicMock())
+    monkeypatch.setattr("app.main.settings.processor_enabled", False)
     app.dependency_overrides[get_db] = lambda: None
 
     try:

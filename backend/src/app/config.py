@@ -6,6 +6,12 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     audio_storage_root: str = "/data/audio"
+    processor_enabled: bool = True
+    processor_poll_interval_seconds: float = 2.0
+    processor_batch_size: int = 1
+    processor_lease_seconds: int = 30
+    processor_heartbeat_interval_seconds: int = 10
+    processor_max_attempts: int = 3
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 

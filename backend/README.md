@@ -1,6 +1,6 @@
 # StorySync Backend
 
-## Phase 3 status
+## Phase 4 status
 This directory now includes:
 - FastAPI application bootstrap
 - PostgreSQL connection wiring
@@ -14,6 +14,9 @@ This directory now includes:
 - `GET /jobs/{job_id}` queue lifecycle lookup
 - `GET /audiobooks/{id}` audiobook + current job lookup
 - `GET /audiobooks` with pagination and optional `state` filter
+- background processing loop for queued jobs
+- lease/heartbeat support with restart-safe lease expiration recovery
+- processing completion transitions to `processed` or `failed`/re-queued
 
 ## Run
 ```bash
