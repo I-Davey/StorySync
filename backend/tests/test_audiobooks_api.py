@@ -23,8 +23,8 @@ def test_upload_endpoint_returns_created_payload(monkeypatch) -> None:
         return expected
 
     monkeypatch.setattr("app.api.audiobooks.handle_upload", fake_handle_upload)
+    monkeypatch.setattr(app.router, "on_startup", [])
 
-    app.router.on_startup = []
     with TestClient(app) as client:
         response = client.post(
             "/audiobooks/upload",
