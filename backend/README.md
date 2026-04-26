@@ -19,7 +19,7 @@ This directory now includes:
 - processing completion transitions to `processed` or `failed`/re-queued
 - M4B metadata extraction during processing (`title`, `album`, `artist`, `genre`, `duration`, `track`, `year`)
 - extracted metadata persisted in normalized audiobook columns plus `metadata_raw` payload
-- comprehensive unit + integration-oriented backend tests
+- comprehensive unit + integration + end-to-end backend tests
 - runtime-generated `.m4b` fixtures in tests (no committed binary test assets)
 - GitHub Actions CI workflow for compile-check + pytest
 

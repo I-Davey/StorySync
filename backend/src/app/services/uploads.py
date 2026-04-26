@@ -85,6 +85,11 @@ def _is_checksum_unique_violation(exc: IntegrityError) -> bool:
         if CHECKSUM_COLUMN in detail:
             return True
 
+    # SQLite and generic DBAPI fallback where driver-specific fields are not present.
+    detail_text = str(orig)
+    if CHECKSUM_COLUMN in detail_text and "UNIQUE constraint failed" in detail_text:
+        return True
+
     return False
 
 

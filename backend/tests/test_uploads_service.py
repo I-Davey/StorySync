@@ -89,6 +89,14 @@ def test_checksum_violation_detected_by_sqlstate_and_detail() -> None:
     assert _is_checksum_unique_violation(err)
 
 
+
+
+def test_checksum_violation_detected_for_sqlite_message_text() -> None:
+    err = _integrity_error(_DummyOrig(text="UNIQUE constraint failed: audiobooks.checksum_sha256"))
+
+    assert _is_checksum_unique_violation(err)
+
+
 def test_non_checksum_unique_violation_returns_false() -> None:
     err = _integrity_error(
         _DummyOrig(
