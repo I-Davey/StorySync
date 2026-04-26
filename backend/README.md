@@ -1,11 +1,15 @@
 # StorySync Backend
 
-## Phase 1 status
-This directory contains the initial backend scaffold with:
+## Phase 2 status
+This directory now includes:
 - FastAPI application bootstrap
 - PostgreSQL connection wiring
 - startup-time schema initialization (no Alembic)
 - health endpoint
+- `POST /audiobooks/upload` endpoint for `.m4b` intake
+- streamed storage writes to `audio_storage_root`
+- SHA256 checksum persistence + duplicate conflict handling
+- processing job creation with `received` -> `queued` transition
 
 ## Run
 ```bash
