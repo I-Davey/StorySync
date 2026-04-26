@@ -25,11 +25,14 @@ def _free_port() -> int:
 def _wait_for_postgres(database_url: str, timeout_seconds: float = 30.0) -> bool:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
+        engine = create_engine(database_url, pool_pre_ping=True)
         try:
-            with psycopg.connect(database_url):
+            with engine.connect():
                 return True
-        except psycopg.Error:
+        except Exception:
             time.sleep(0.5)
+        finally:
+            engine.dispose()
     return False
 
 
