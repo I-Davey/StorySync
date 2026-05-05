@@ -6,11 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.dependencies import require_admin
 from app.models import ProcessingJob
 from app.schemas import JobListResponse, JobResponse, JobState
 from app.services import jobs as job_service
 
-router = APIRouter(prefix="/jobs", tags=["jobs"])
+router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[Depends(require_admin)])
 
 
 def _job_response(job: ProcessingJob) -> JobResponse:

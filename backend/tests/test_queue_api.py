@@ -226,9 +226,34 @@ def test_list_audiobooks_supports_state_filter_query_param() -> None:
     assert not hasattr(response.items[0], "cover_path")
 
 
-def test_list_pagination_query_bounds_are_enforced(monkeypatch) -> None:
+def test_job_routes_require_admin(monkeypatch, override_auth) -> None:
     monkeypatch.setattr("app.main.initialize_schema", MagicMock())
     monkeypatch.setattr("app.main.settings.processor_enabled", False)
+    job_id = uuid.uuid4()
+
+    try:
+        with TestClient(app) as client:
+            unauthenticated = client.get("/jobs")
+
+            override_auth(is_admin=False)
+            forbidden_list = client.get("/jobs")
+            forbidden_get = client.get(f"/jobs/{job_id}")
+            forbidden_cancel = client.post(f"/jobs/{job_id}/cancel")
+            forbidden_retry = client.post(f"/jobs/{job_id}/retry")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert unauthenticated.status_code == 401
+    assert forbidden_list.status_code == 403
+    assert forbidden_get.status_code == 403
+    assert forbidden_cancel.status_code == 403
+    assert forbidden_retry.status_code == 403
+
+
+def test_list_pagination_query_bounds_are_enforced(monkeypatch, override_auth) -> None:
+    monkeypatch.setattr("app.main.initialize_schema", MagicMock())
+    monkeypatch.setattr("app.main.settings.processor_enabled", False)
+    override_auth(is_admin=True)
     app.dependency_overrides[get_db] = lambda: None
 
     try:

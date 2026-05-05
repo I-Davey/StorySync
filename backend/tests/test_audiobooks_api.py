@@ -11,7 +11,67 @@ from app.main import app
 from app.services.uploads import UploadResult
 
 
-def test_canonical_upload_endpoint_returns_public_created_payload(monkeypatch, generated_m4b_payload: bytes) -> None:
+def test_audiobook_read_routes_require_active_user(monkeypatch, override_auth) -> None:
+    monkeypatch.setattr("app.main.initialize_schema", MagicMock())
+    monkeypatch.setattr("app.main.settings.processor_enabled", False)
+
+    class _EmptyListDB:
+        def execute(self, stmt):
+            return type("Result", (), {"all": lambda self: []})()
+
+    try:
+        with TestClient(app) as client:
+            unauthorized = client.get("/audiobooks")
+
+            override_auth()
+            app.dependency_overrides[get_db] = lambda: _EmptyListDB()
+            authorized = client.get("/audiobooks")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+
+
+def test_audiobook_write_routes_require_admin(monkeypatch, override_auth, generated_m4b_payload: bytes) -> None:
+    monkeypatch.setattr("app.api.audiobooks.handle_upload", MagicMock())
+    monkeypatch.setattr("app.main.initialize_schema", MagicMock())
+    monkeypatch.setattr("app.main.settings.processor_enabled", False)
+    audiobook_id = uuid.uuid4()
+
+    try:
+        with TestClient(app) as client:
+            unauthenticated = client.post(
+                "/audiobooks",
+                files={"file": ("book.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
+            )
+
+            override_auth(is_admin=False)
+            forbidden = client.post(
+                "/audiobooks/upload",
+                files={"file": ("book.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
+            )
+            forbidden_patch = client.patch(f"/audiobooks/{audiobook_id}", json={"metadata": {"title": "New"}})
+            forbidden_delete = client.delete(f"/audiobooks/{audiobook_id}")
+            forbidden_cover_upload = client.post(
+                f"/audiobooks/{audiobook_id}/cover",
+                files={"file": ("cover.jpg", BytesIO(b"fake-jpeg"), "image/jpeg")},
+            )
+            forbidden_cover_delete = client.delete(f"/audiobooks/{audiobook_id}/cover")
+            forbidden_reprocess = client.post(f"/audiobooks/{audiobook_id}/reprocess")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert unauthenticated.status_code == 401
+    assert forbidden.status_code == 403
+    assert forbidden_patch.status_code == 403
+    assert forbidden_delete.status_code == 403
+    assert forbidden_cover_upload.status_code == 403
+    assert forbidden_cover_delete.status_code == 403
+    assert forbidden_reprocess.status_code == 403
+
+
+def test_canonical_upload_endpoint_returns_public_created_payload(monkeypatch, override_auth, generated_m4b_payload: bytes) -> None:
     expected = UploadResult(
         audiobook_id=uuid.uuid4(),
         original_filename="book.m4b",
@@ -28,6 +88,7 @@ def test_canonical_upload_endpoint_returns_public_created_payload(monkeypatch, g
     monkeypatch.setattr("app.api.audiobooks.handle_upload", fake_handle_upload)
     monkeypatch.setattr("app.main.initialize_schema", MagicMock())
     monkeypatch.setattr("app.main.settings.processor_enabled", False)
+    override_auth(is_admin=True)
     app.dependency_overrides[get_db] = lambda: None
 
     try:
@@ -50,7 +111,7 @@ def test_canonical_upload_endpoint_returns_public_created_payload(monkeypatch, g
     assert "stored_path" not in data
 
 
-def test_upload_compatibility_alias_keeps_created_payload(monkeypatch, generated_m4b_payload: bytes) -> None:
+def test_upload_compatibility_alias_keeps_created_payload(monkeypatch, override_auth, generated_m4b_payload: bytes) -> None:
     expected = UploadResult(
         audiobook_id=uuid.uuid4(),
         original_filename="book.m4b",
@@ -64,6 +125,7 @@ def test_upload_compatibility_alias_keeps_created_payload(monkeypatch, generated
     monkeypatch.setattr("app.api.audiobooks.handle_upload", lambda db, file: expected)
     monkeypatch.setattr("app.main.initialize_schema", MagicMock())
     monkeypatch.setattr("app.main.settings.processor_enabled", False)
+    override_auth(is_admin=True)
     app.dependency_overrides[get_db] = lambda: None
 
     try:

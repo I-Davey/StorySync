@@ -15,6 +15,18 @@ from sqlalchemy import create_engine
 
 from app.models import Base
 
+E2E_ADMIN_EMAIL = "admin@mail.com"
+E2E_ADMIN_PASSWORD = "e2e-admin-password"
+
+
+def _authenticate_admin(client: httpx.Client, base_url: str) -> None:
+    response = client.post(
+        f"{base_url}/auth/login",
+        json={"email": E2E_ADMIN_EMAIL, "password": E2E_ADMIN_PASSWORD},
+    )
+    assert response.status_code == 200
+    client.headers.update({"Authorization": f"Bearer {response.json()['access_token']}"})
+
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -75,6 +87,8 @@ def live_backend_server(postgres_ready: str, reset_postgres_schema, tmp_path: Pa
     env["DATABASE_URL"] = postgres_ready
     env["AUDIO_STORAGE_ROOT"] = str(audio_dir)
     env["PROCESSOR_ENABLED"] = "false"
+    env["STORYSYNC_ADMIN_EMAIL"] = E2E_ADMIN_EMAIL
+    env["STORYSYNC_ADMIN_PASSWORD"] = E2E_ADMIN_PASSWORD
 
     process = subprocess.Popen(  # noqa: S603
         [
@@ -127,6 +141,7 @@ def test_e2e_live_upload_then_fetch_job_and_audiobook(
     base_url, audio_dir = live_backend_server
 
     with httpx.Client(timeout=10.0) as client:
+        _authenticate_admin(client, base_url)
         upload_response = client.post(
             f"{base_url}/audiobooks",
             files={"file": ("live-flow.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
@@ -175,6 +190,7 @@ def test_e2e_live_duplicate_upload_returns_conflict(
     base_url, _audio_dir = live_backend_server
 
     with httpx.Client(timeout=10.0) as client:
+        _authenticate_admin(client, base_url)
         first = client.post(
             f"{base_url}/audiobooks/upload",
             files={"file": ("dup-a.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
@@ -196,6 +212,7 @@ def test_e2e_live_patch_reprocess_download_and_delete_audiobook(
     base_url, _audio_dir = live_backend_server
 
     with httpx.Client(timeout=10.0) as client:
+        _authenticate_admin(client, base_url)
         upload_response = client.post(
             f"{base_url}/audiobooks/upload",
             files={"file": ("lifecycle-flow.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
@@ -268,6 +285,7 @@ def test_e2e_live_lifecycle_missing_audiobook_returns_404(live_backend_server) -
     missing_id = "00000000-0000-0000-0000-000000000404"
 
     with httpx.Client(timeout=10.0) as client:
+        _authenticate_admin(client, base_url)
         patch_response = client.patch(
             f"{base_url}/audiobooks/{missing_id}",
             json={"metadata_title": "Nope"},
@@ -293,6 +311,7 @@ def test_e2e_live_job_admin_list_cancel_retry_errors(
     missing_id = "00000000-0000-0000-0000-000000000404"
 
     with httpx.Client(timeout=10.0) as client:
+        _authenticate_admin(client, base_url)
         upload_response = client.post(
             f"{base_url}/audiobooks/upload",
             files={"file": ("job-admin-flow.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
@@ -361,6 +380,7 @@ def test_e2e_live_cover_upload_get_and_delete(
     )
 
     with httpx.Client(timeout=10.0) as client:
+        _authenticate_admin(client, base_url)
         upload_response = client.post(
             f"{base_url}/audiobooks/upload",
             files={"file": ("cover-flow.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
@@ -407,6 +427,7 @@ def test_e2e_live_cover_errors(
     missing_id = "00000000-0000-0000-0000-000000000404"
 
     with httpx.Client(timeout=10.0) as client:
+        _authenticate_admin(client, base_url)
         missing_upload_response = client.post(
             f"{base_url}/audiobooks/{missing_id}/cover",
             files={"file": ("cover.png", BytesIO(b"png"), "image/png")},

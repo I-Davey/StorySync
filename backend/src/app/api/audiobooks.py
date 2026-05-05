@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.dependencies import get_current_user, require_admin
 from app.models import Audiobook, ProcessingJob
 from app.schemas import (
     AudiobookListResponse,
@@ -90,7 +91,12 @@ def _upload_response(result) -> UploadAudiobookResponse:
     )
 
 
-@router.post("", response_model=UploadAudiobookResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=UploadAudiobookResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_admin)],
+)
 def create_audiobook(
     response: Response,
     file: UploadFile = File(...),
@@ -101,19 +107,24 @@ def create_audiobook(
     return _upload_response(result)
 
 
-@router.post("/upload", response_model=UploadAudiobookResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/upload",
+    response_model=UploadAudiobookResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_admin)],
+)
 def upload_audiobook(file: UploadFile = File(...), db: Session = Depends(get_db)) -> UploadAudiobookResponse:
     return _upload_response(handle_upload(db, file))
 
 
-@router.get("/{audiobook_id}", response_model=AudiobookResponse)
+@router.get("/{audiobook_id}", response_model=AudiobookResponse, dependencies=[Depends(get_current_user)])
 def get_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> AudiobookResponse:
     audiobook = _get_audiobook_or_404(db, audiobook_id)
     job = _get_job_for_audiobook(db, audiobook.id)
     return _audiobook_response(audiobook, job)
 
 
-@router.patch("/{audiobook_id}", response_model=AudiobookResponse)
+@router.patch("/{audiobook_id}", response_model=AudiobookResponse, dependencies=[Depends(require_admin)])
 def update_audiobook(
     audiobook_id: uuid.UUID,
     payload: UpdateAudiobookRequest,
@@ -125,7 +136,7 @@ def update_audiobook(
     return _audiobook_response(audiobook, job)
 
 
-@router.post("/{audiobook_id}/cover", response_model=AudiobookResponse)
+@router.post("/{audiobook_id}/cover", response_model=AudiobookResponse, dependencies=[Depends(require_admin)])
 def upload_audiobook_cover(
     audiobook_id: uuid.UUID,
     file: UploadFile = File(...),
@@ -137,7 +148,7 @@ def upload_audiobook_cover(
     return _audiobook_response(audiobook, job)
 
 
-@router.get("/{audiobook_id}/cover", response_model=None)
+@router.get("/{audiobook_id}/cover", response_model=None, dependencies=[Depends(get_current_user)])
 def get_audiobook_cover(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
     audiobook = _get_audiobook_or_404(db, audiobook_id)
 
@@ -154,14 +165,18 @@ def get_audiobook_cover(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) 
     return Response(content=content, media_type=media_type)
 
 
-@router.delete("/{audiobook_id}/cover", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{audiobook_id}/cover",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_admin)],
+)
 def delete_audiobook_cover(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
     audiobook = _get_audiobook_or_404(db, audiobook_id)
     delete_manual_cover(db, audiobook)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.delete("/{audiobook_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{audiobook_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_admin)])
 def delete_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
     audiobook = _get_audiobook_or_404(db, audiobook_id)
     try:
@@ -171,7 +186,7 @@ def delete_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/{audiobook_id}/reprocess", response_model=JobResponse)
+@router.post("/{audiobook_id}/reprocess", response_model=JobResponse, dependencies=[Depends(require_admin)])
 def reprocess_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> JobResponse:
     audiobook = _get_audiobook_or_404(db, audiobook_id)
     try:
@@ -183,7 +198,7 @@ def reprocess_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) 
     return _job_response(job)
 
 
-@router.get("/{audiobook_id}/download")
+@router.get("/{audiobook_id}/download", dependencies=[Depends(get_current_user)])
 def download_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> FileResponse:
     audiobook = _get_audiobook_or_404(db, audiobook_id)
     try:
@@ -197,7 +212,7 @@ def download_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -
     )
 
 
-@router.get("", response_model=AudiobookListResponse)
+@router.get("", response_model=AudiobookListResponse, dependencies=[Depends(get_current_user)])
 def list_audiobooks(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
