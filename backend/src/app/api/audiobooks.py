@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
@@ -20,8 +19,9 @@ from app.schemas import (
     UpdateAudiobookRequest,
     UploadAudiobookResponse,
 )
-from app.services.covers import delete_manual_cover, extract_embedded_mp4_cover, replace_manual_cover
+from app.services import audiobooks as audiobook_service
 from app.services import jobs as job_service
+from app.services.covers import delete_manual_cover, extract_embedded_mp4_cover, replace_manual_cover
 from app.services.uploads import handle_upload
 
 router = APIRouter(prefix="/audiobooks", tags=["audiobooks"])
@@ -68,14 +68,14 @@ def _audiobook_response(audiobook: Audiobook, job: ProcessingJob | None = None) 
 
 
 def _get_audiobook_or_404(db: Session, audiobook_id: uuid.UUID) -> Audiobook:
-    audiobook = db.get(Audiobook, audiobook_id)
+    audiobook = audiobook_service.get_audiobook(db, audiobook_id)
     if audiobook is None:
         raise HTTPException(status_code=404, detail="Audiobook not found")
     return audiobook
 
 
 def _get_job_for_audiobook(db: Session, audiobook_id: uuid.UUID) -> ProcessingJob | None:
-    return job_service.get_job_for_audiobook(db, audiobook_id)
+    return audiobook_service.get_job_for_audiobook(db, audiobook_id)
 
 
 def _upload_response(result) -> UploadAudiobookResponse:
@@ -120,10 +120,7 @@ def update_audiobook(
     db: Session = Depends(get_db),
 ) -> AudiobookResponse:
     audiobook = _get_audiobook_or_404(db, audiobook_id)
-    for field_name, value in payload.model_dump(exclude_unset=True).items():
-        setattr(audiobook, field_name, value)
-    db.commit()
-    db.refresh(audiobook)
+    audiobook = audiobook_service.update_metadata(db, audiobook, payload)
     job = _get_job_for_audiobook(db, audiobook.id)
     return _audiobook_response(audiobook, job)
 
@@ -145,8 +142,8 @@ def get_audiobook_cover(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) 
     audiobook = _get_audiobook_or_404(db, audiobook_id)
 
     if audiobook.cover_path:
-        path = Path(audiobook.cover_path)
-        if path.is_file():
+        path = audiobook_service.cover_path(audiobook)
+        if path is not None:
             return FileResponse(path, media_type=audiobook.cover_media_type or "application/octet-stream")
 
     embedded = extract_embedded_mp4_cover(audiobook)
@@ -167,31 +164,20 @@ def delete_audiobook_cover(audiobook_id: uuid.UUID, db: Session = Depends(get_db
 @router.delete("/{audiobook_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
     audiobook = _get_audiobook_or_404(db, audiobook_id)
-    paths = [audiobook.stored_path]
-    cover_path = getattr(audiobook, "cover_path", None)
-    if cover_path:
-        paths.append(cover_path)
-
-    for path in paths:
-        try:
-            Path(path).unlink(missing_ok=True)
-        except OSError as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to delete stored file: {path}") from exc
-
-    db.delete(audiobook)
-    db.commit()
+    try:
+        audiobook_service.delete_audiobook(db, audiobook)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="Failed to delete stored file") from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/{audiobook_id}/reprocess", response_model=JobResponse)
 def reprocess_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> JobResponse:
     audiobook = _get_audiobook_or_404(db, audiobook_id)
-    job = _get_job_for_audiobook(db, audiobook.id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Processing job not found")
-
     try:
-        job = job_service.reprocess_audiobook(db, audiobook, job)
+        job = audiobook_service.reprocess_audiobook(db, audiobook)
+    except audiobook_service.ProcessingJobMissingError as exc:
+        raise HTTPException(status_code=404, detail="Processing job not found") from exc
     except job_service.JobTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _job_response(job)
@@ -200,9 +186,10 @@ def reprocess_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) 
 @router.get("/{audiobook_id}/download")
 def download_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> FileResponse:
     audiobook = _get_audiobook_or_404(db, audiobook_id)
-    path = Path(audiobook.stored_path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Audiobook file not found")
+    try:
+        path = audiobook_service.download_path(audiobook)
+    except audiobook_service.AudiobookFileMissingError as exc:
+        raise HTTPException(status_code=404, detail="Audiobook file not found") from exc
     return FileResponse(
         path,
         media_type="audio/mp4",
