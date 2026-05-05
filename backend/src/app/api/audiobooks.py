@@ -1,161 +1,240 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.dependencies import get_current_user, require_admin
 from app.models import Audiobook, ProcessingJob
+from app.schemas import (
+    AudiobookListResponse,
+    AudiobookMetadata,
+    AudiobookResponse,
+    CoverResource,
+    JobResponse,
+    JobState,
+    PublicJobSummary,
+    UpdateAudiobookRequest,
+    UploadAudiobookResponse,
+)
+from app.services import audiobooks as audiobook_service
+from app.services import jobs as job_service
+from app.services.covers import delete_manual_cover, extract_embedded_mp4_cover, replace_manual_cover
 from app.services.uploads import handle_upload
 
 router = APIRouter(prefix="/audiobooks", tags=["audiobooks"])
 
 
-class UploadAudiobookResponse(BaseModel):
-    audiobook_id: uuid.UUID = Field(description="Created audiobook identifier")
-    original_filename: str
-    stored_path: str
-    file_size_bytes: int
-    checksum_sha256: str
-    job_id: uuid.UUID
-    job_state: str
-    queue_position: int | None = None
+def _job_response(job: ProcessingJob) -> JobResponse:
+    return JobResponse(
+        id=job.id,
+        audiobook_id=job.audiobook_id,
+        state=job.state,
+        attempt_count=job.attempt_count,
+        worker_id=job.worker_id,
+        lease_expires_at=job.lease_expires_at,
+        last_error=job.last_error,
+    )
 
 
-class JobResponse(BaseModel):
-    id: uuid.UUID
-    audiobook_id: uuid.UUID
-    state: str
-    queue_position: int | None
-    attempt_count: int
-    worker_id: str | None = None
-    lease_expires_at: datetime | None = None
-    last_error: str | None = None
+def _public_job_summary(job: ProcessingJob) -> PublicJobSummary:
+    return PublicJobSummary(
+        id=job.id,
+        audiobook_id=job.audiobook_id,
+        state=job.state,
+        attempt_count=job.attempt_count,
+    )
 
 
-class AudiobookResponse(BaseModel):
-    id: uuid.UUID
-    original_filename: str
-    stored_path: str
-    file_size_bytes: int
-    checksum_sha256: str
-    metadata_title: str | None = None
-    metadata_album: str | None = None
-    metadata_artist: str | None = None
-    metadata_genre: str | None = None
-    metadata_duration_seconds: int | None = None
-    metadata_track_number: int | None = None
-    metadata_year: int | None = None
-    metadata_raw: dict | None = None
-    created_at: datetime
-    job: JobResponse | None = None
+def _audiobook_response(audiobook: Audiobook, job: ProcessingJob | None = None) -> AudiobookResponse:
+    audiobook_url = f"/audiobooks/{audiobook.id}"
+    cover = None
+    if getattr(audiobook, "cover_path", None):
+        cover = CoverResource(url=f"{audiobook_url}/cover", media_type=getattr(audiobook, "cover_media_type", None))
+
+    return AudiobookResponse(
+        id=audiobook.id,
+        original_filename=audiobook.original_filename,
+        file_size_bytes=audiobook.file_size_bytes,
+        checksum_sha256=audiobook.checksum_sha256,
+        metadata=AudiobookMetadata(
+            title=audiobook.metadata_title,
+            album=audiobook.metadata_album,
+            artist=audiobook.metadata_artist,
+            genre=audiobook.metadata_genre,
+            duration_seconds=audiobook.metadata_duration_seconds,
+            track_number=audiobook.metadata_track_number,
+            year=audiobook.metadata_year,
+            raw=audiobook.metadata_raw,
+        ),
+        cover=cover,
+        download_url=f"{audiobook_url}/download",
+        created_at=audiobook.created_at,
+        job=_public_job_summary(job) if job else None,
+    )
 
 
-class AudiobookListResponse(BaseModel):
-    items: list[AudiobookResponse]
-    page: int
-    page_size: int
+def _get_audiobook_or_404(db: Session, audiobook_id: uuid.UUID) -> Audiobook:
+    audiobook = audiobook_service.get_audiobook(db, audiobook_id)
+    if audiobook is None:
+        raise HTTPException(status_code=404, detail="Audiobook not found")
+    return audiobook
 
 
-@router.post("/upload", response_model=UploadAudiobookResponse, status_code=201)
-def upload_audiobook(file: UploadFile = File(...), db: Session = Depends(get_db)) -> UploadAudiobookResponse:
-    result = handle_upload(db, file)
+def _get_job_for_audiobook(db: Session, audiobook_id: uuid.UUID) -> ProcessingJob | None:
+    return audiobook_service.get_job_for_audiobook(db, audiobook_id)
+
+
+def _upload_response(result) -> UploadAudiobookResponse:
     return UploadAudiobookResponse(
         audiobook_id=result.audiobook_id,
         original_filename=result.original_filename,
-        stored_path=result.stored_path,
         file_size_bytes=result.file_size_bytes,
         checksum_sha256=result.checksum_sha256,
         job_id=result.job_id,
         job_state=result.job_state,
-        queue_position=getattr(result, "queue_position", None),
+        download_url=f"/audiobooks/{result.audiobook_id}/download",
     )
 
 
-@router.get("/{audiobook_id}", response_model=AudiobookResponse)
+@router.post(
+    "",
+    response_model=UploadAudiobookResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_admin)],
+)
+def create_audiobook(
+    response: Response,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> UploadAudiobookResponse:
+    result = handle_upload(db, file)
+    response.headers["Location"] = f"/audiobooks/{result.audiobook_id}"
+    return _upload_response(result)
+
+
+@router.post(
+    "/upload",
+    response_model=UploadAudiobookResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_admin)],
+)
+def upload_audiobook(file: UploadFile = File(...), db: Session = Depends(get_db)) -> UploadAudiobookResponse:
+    return _upload_response(handle_upload(db, file))
+
+
+@router.get("/{audiobook_id}", response_model=AudiobookResponse, dependencies=[Depends(get_current_user)])
 def get_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> AudiobookResponse:
-    audiobook = db.get(Audiobook, audiobook_id)
-    if audiobook is None:
-        raise HTTPException(status_code=404, detail="Audiobook not found")
+    audiobook = _get_audiobook_or_404(db, audiobook_id)
+    job = _get_job_for_audiobook(db, audiobook.id)
+    return _audiobook_response(audiobook, job)
 
-    job = db.execute(select(ProcessingJob).where(ProcessingJob.audiobook_id == audiobook.id)).scalar_one_or_none()
-    return AudiobookResponse(
-        id=audiobook.id,
-        original_filename=audiobook.original_filename,
-        stored_path=audiobook.stored_path,
-        file_size_bytes=audiobook.file_size_bytes,
-        checksum_sha256=audiobook.checksum_sha256,
-        metadata_title=audiobook.metadata_title,
-        metadata_album=audiobook.metadata_album,
-        metadata_artist=audiobook.metadata_artist,
-        metadata_genre=audiobook.metadata_genre,
-        metadata_duration_seconds=audiobook.metadata_duration_seconds,
-        metadata_track_number=audiobook.metadata_track_number,
-        metadata_year=audiobook.metadata_year,
-        metadata_raw=audiobook.metadata_raw,
-        created_at=audiobook.created_at,
-        job=(
-            JobResponse(
-                id=job.id,
-                audiobook_id=job.audiobook_id,
-                state=job.state,
-                queue_position=job.queue_position,
-                attempt_count=job.attempt_count,
-                worker_id=job.worker_id,
-                lease_expires_at=job.lease_expires_at,
-                last_error=job.last_error,
-            )
-            if job
-            else None
-        ),
+
+@router.patch("/{audiobook_id}", response_model=AudiobookResponse, dependencies=[Depends(require_admin)])
+def update_audiobook(
+    audiobook_id: uuid.UUID,
+    payload: UpdateAudiobookRequest,
+    db: Session = Depends(get_db),
+) -> AudiobookResponse:
+    audiobook = _get_audiobook_or_404(db, audiobook_id)
+    audiobook = audiobook_service.update_metadata(db, audiobook, payload)
+    job = _get_job_for_audiobook(db, audiobook.id)
+    return _audiobook_response(audiobook, job)
+
+
+@router.post("/{audiobook_id}/cover", response_model=AudiobookResponse, dependencies=[Depends(require_admin)])
+def upload_audiobook_cover(
+    audiobook_id: uuid.UUID,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> AudiobookResponse:
+    audiobook = _get_audiobook_or_404(db, audiobook_id)
+    audiobook = replace_manual_cover(db, audiobook, file)
+    job = _get_job_for_audiobook(db, audiobook.id)
+    return _audiobook_response(audiobook, job)
+
+
+@router.get("/{audiobook_id}/cover", response_model=None, dependencies=[Depends(get_current_user)])
+def get_audiobook_cover(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+    audiobook = _get_audiobook_or_404(db, audiobook_id)
+
+    if audiobook.cover_path:
+        path = audiobook_service.cover_path(audiobook)
+        if path is not None:
+            return FileResponse(path, media_type=audiobook.cover_media_type or "application/octet-stream")
+
+    embedded = extract_embedded_mp4_cover(audiobook)
+    if embedded is None:
+        raise HTTPException(status_code=404, detail="Cover not found")
+
+    content, media_type = embedded
+    return Response(content=content, media_type=media_type)
+
+
+@router.delete(
+    "/{audiobook_id}/cover",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_admin)],
+)
+def delete_audiobook_cover(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+    audiobook = _get_audiobook_or_404(db, audiobook_id)
+    delete_manual_cover(db, audiobook)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/{audiobook_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_admin)])
+def delete_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+    audiobook = _get_audiobook_or_404(db, audiobook_id)
+    try:
+        audiobook_service.delete_audiobook(db, audiobook)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="Failed to delete stored file") from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{audiobook_id}/reprocess", response_model=JobResponse, dependencies=[Depends(require_admin)])
+def reprocess_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> JobResponse:
+    audiobook = _get_audiobook_or_404(db, audiobook_id)
+    try:
+        job = audiobook_service.reprocess_audiobook(db, audiobook)
+    except audiobook_service.ProcessingJobMissingError as exc:
+        raise HTTPException(status_code=404, detail="Processing job not found") from exc
+    except job_service.JobTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _job_response(job)
+
+
+@router.get("/{audiobook_id}/download", dependencies=[Depends(get_current_user)])
+def download_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> FileResponse:
+    audiobook = _get_audiobook_or_404(db, audiobook_id)
+    try:
+        path = audiobook_service.download_path(audiobook)
+    except audiobook_service.AudiobookFileMissingError as exc:
+        raise HTTPException(status_code=404, detail="Audiobook file not found") from exc
+    return FileResponse(
+        path,
+        media_type="audio/mp4",
+        filename=audiobook.original_filename,
     )
 
 
-@router.get("", response_model=AudiobookListResponse)
+@router.get("", response_model=AudiobookListResponse, dependencies=[Depends(get_current_user)])
 def list_audiobooks(
-    page: int = 1,
-    page_size: int = 20,
-    state: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    state: JobState | None = None,
     db: Session = Depends(get_db),
 ) -> AudiobookListResponse:
-    offset = (max(page, 1) - 1) * max(page_size, 1)
+    offset = (page - 1) * page_size
     stmt = select(Audiobook, ProcessingJob).join(ProcessingJob, ProcessingJob.audiobook_id == Audiobook.id)
     if state:
-        stmt = stmt.where(ProcessingJob.state == state)
-    stmt = stmt.order_by(Audiobook.created_at.desc()).offset(offset).limit(max(page_size, 1))
+        stmt = stmt.where(ProcessingJob.state == state.value)
+    stmt = stmt.order_by(Audiobook.created_at.desc()).offset(offset).limit(page_size)
 
     rows = db.execute(stmt).all()
-    items = [
-        AudiobookResponse(
-            id=a.id,
-            original_filename=a.original_filename,
-            stored_path=a.stored_path,
-            file_size_bytes=a.file_size_bytes,
-            checksum_sha256=a.checksum_sha256,
-            metadata_title=a.metadata_title,
-            metadata_album=a.metadata_album,
-            metadata_artist=a.metadata_artist,
-            metadata_genre=a.metadata_genre,
-            metadata_duration_seconds=a.metadata_duration_seconds,
-            metadata_track_number=a.metadata_track_number,
-            metadata_year=a.metadata_year,
-            metadata_raw=a.metadata_raw,
-            created_at=a.created_at,
-            job=JobResponse(
-                id=j.id,
-                audiobook_id=j.audiobook_id,
-                state=j.state,
-                queue_position=j.queue_position,
-                attempt_count=j.attempt_count,
-                worker_id=j.worker_id,
-                lease_expires_at=j.lease_expires_at,
-                last_error=j.last_error,
-            ),
-        )
-        for a, j in rows
-    ]
-    return AudiobookListResponse(items=items, page=max(page, 1), page_size=max(page_size, 1))
+    items = [_audiobook_response(a, j) for a, j in rows]
+    return AudiobookListResponse(items=items, page=page, page_size=page_size)

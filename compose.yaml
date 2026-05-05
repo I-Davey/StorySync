@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: storysync
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d storysync"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/storysync
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      AUDIO_STORAGE_ROOT: /data/audio
+      PROCESSOR_ENABLED: "true"
+      STORYSYNC_ADMIN_EMAIL: ${STORYSYNC_ADMIN_EMAIL:-admin@mail.com}
+      STORYSYNC_ADMIN_PASSWORD: ${STORYSYNC_ADMIN_PASSWORD:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - audio_data:/data/audio
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+  audio_data:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -148,16 +147,15 @@ def test_handle_upload_409_on_checksum_duplicate_and_file_deleted(tmp_path: Path
     assert list(tmp_path.glob("*.m4b")) == []
 
 
-def test_handle_upload_assigns_next_queue_position(tmp_path: Path, generated_m4b_payload: bytes) -> None:
+def test_handle_upload_creates_queued_job_without_queue_position(tmp_path: Path, generated_m4b_payload: bytes) -> None:
     payload = generated_m4b_payload
     upload = UploadFile(filename="book.m4b", file=BytesIO(payload))
 
     db = MagicMock()
-    db.scalar.return_value = 42
 
     with patch("app.services.uploads.settings") as mock_settings:
         mock_settings.audio_storage_root = str(tmp_path)
         result = handle_upload(db, upload)
 
-    assert result.queue_position == 42
     assert result.job_state == "queued"
+    assert not hasattr(result, "queue_position")
