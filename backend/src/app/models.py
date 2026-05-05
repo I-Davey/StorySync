@@ -41,6 +41,8 @@ class Audiobook(Base):
     metadata_track_number: Mapped[int | None] = mapped_column(Integer)
     metadata_year: Mapped[int | None] = mapped_column(Integer)
     metadata_raw: Mapped[dict | None] = mapped_column(JSON)
+    cover_path: Mapped[str | None] = mapped_column(Text)
+    cover_media_type: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 

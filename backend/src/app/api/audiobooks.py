@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Audiobook, ProcessingJob
+from app.services.covers import delete_manual_cover, extract_embedded_mp4_cover, replace_manual_cover
 from app.services.uploads import handle_upload
 
 router = APIRouter(prefix="/audiobooks", tags=["audiobooks"])
@@ -53,6 +54,8 @@ class AudiobookResponse(BaseModel):
     metadata_track_number: int | None = None
     metadata_year: int | None = None
     metadata_raw: dict | None = None
+    cover_path: str | None = None
+    cover_media_type: str | None = None
     created_at: datetime
     job: JobResponse | None = None
 
@@ -101,6 +104,8 @@ def _audiobook_response(audiobook: Audiobook, job: ProcessingJob | None = None) 
         metadata_track_number=audiobook.metadata_track_number,
         metadata_year=audiobook.metadata_year,
         metadata_raw=audiobook.metadata_raw,
+        cover_path=getattr(audiobook, "cover_path", None),
+        cover_media_type=getattr(audiobook, "cover_media_type", None),
         created_at=audiobook.created_at,
         job=_job_response(job) if job else None,
     )
@@ -158,6 +163,42 @@ def update_audiobook(
     db.refresh(audiobook)
     job = _get_job_for_audiobook(db, audiobook.id)
     return _audiobook_response(audiobook, job)
+
+
+@router.post("/{audiobook_id}/cover", response_model=AudiobookResponse)
+def upload_audiobook_cover(
+    audiobook_id: uuid.UUID,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> AudiobookResponse:
+    audiobook = _get_audiobook_or_404(db, audiobook_id)
+    audiobook = replace_manual_cover(db, audiobook, file)
+    job = _get_job_for_audiobook(db, audiobook.id)
+    return _audiobook_response(audiobook, job)
+
+
+@router.get("/{audiobook_id}/cover", response_model=None)
+def get_audiobook_cover(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+    audiobook = _get_audiobook_or_404(db, audiobook_id)
+
+    if audiobook.cover_path:
+        path = Path(audiobook.cover_path)
+        if path.is_file():
+            return FileResponse(path, media_type=audiobook.cover_media_type or "application/octet-stream")
+
+    embedded = extract_embedded_mp4_cover(audiobook)
+    if embedded is None:
+        raise HTTPException(status_code=404, detail="Cover not found")
+
+    content, media_type = embedded
+    return Response(content=content, media_type=media_type)
+
+
+@router.delete("/{audiobook_id}/cover", status_code=status.HTTP_204_NO_CONTENT)
+def delete_audiobook_cover(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+    audiobook = _get_audiobook_or_404(db, audiobook_id)
+    delete_manual_cover(db, audiobook)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.delete("/{audiobook_id}", status_code=status.HTTP_204_NO_CONTENT)

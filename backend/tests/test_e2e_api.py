@@ -267,3 +267,85 @@ def test_e2e_live_lifecycle_missing_audiobook_returns_404(live_backend_server) -
 
         delete_response = client.delete(f"{base_url}/audiobooks/{missing_id}")
         assert delete_response.status_code == 404
+
+
+def test_e2e_live_cover_upload_get_and_delete(
+    live_backend_server,
+    generated_m4b_payload: bytes,
+) -> None:
+    base_url, audio_dir = live_backend_server
+    tiny_png = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xff"
+        b"\xff?\x00\x05\xfe\x02\xfeA\x90\xf4\xd9\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+
+    with httpx.Client(timeout=10.0) as client:
+        upload_response = client.post(
+            f"{base_url}/audiobooks/upload",
+            files={"file": ("cover-flow.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
+        )
+        assert upload_response.status_code == 201
+        uploaded = upload_response.json()
+        audiobook_id = uploaded["audiobook_id"]
+
+        cover_response = client.post(
+            f"{base_url}/audiobooks/{audiobook_id}/cover",
+            files={"file": ("cover.png", BytesIO(tiny_png), "image/png")},
+        )
+        assert cover_response.status_code == 200
+        cover_payload = cover_response.json()
+        assert cover_payload["id"] == audiobook_id
+
+        cover_path = audio_dir / "covers" / f"{audiobook_id}.png"
+        assert cover_path.exists()
+        assert cover_path.read_bytes() == tiny_png
+
+        get_cover_response = client.get(f"{base_url}/audiobooks/{audiobook_id}/cover")
+        assert get_cover_response.status_code == 200
+        assert get_cover_response.headers["content-type"].startswith("image/png")
+        assert get_cover_response.content == tiny_png
+
+        delete_cover_response = client.delete(f"{base_url}/audiobooks/{audiobook_id}/cover")
+        assert delete_cover_response.status_code == 204
+        assert not cover_path.exists()
+
+        missing_cover_response = client.get(f"{base_url}/audiobooks/{audiobook_id}/cover")
+        assert missing_cover_response.status_code == 404
+
+
+def test_e2e_live_cover_errors(
+    live_backend_server,
+    generated_m4b_payload: bytes,
+) -> None:
+    base_url, _audio_dir = live_backend_server
+    missing_id = "00000000-0000-0000-0000-000000000404"
+
+    with httpx.Client(timeout=10.0) as client:
+        missing_upload_response = client.post(
+            f"{base_url}/audiobooks/{missing_id}/cover",
+            files={"file": ("cover.png", BytesIO(b"png"), "image/png")},
+        )
+        assert missing_upload_response.status_code == 404
+
+        upload_response = client.post(
+            f"{base_url}/audiobooks/upload",
+            files={"file": ("cover-errors.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
+        )
+        assert upload_response.status_code == 201
+        audiobook_id = upload_response.json()["audiobook_id"]
+
+        missing_cover_response = client.get(f"{base_url}/audiobooks/{audiobook_id}/cover")
+        assert missing_cover_response.status_code == 404
+
+        unsupported_response = client.post(
+            f"{base_url}/audiobooks/{audiobook_id}/cover",
+            files={"file": ("not-image.txt", BytesIO(b"not an image"), "text/plain")},
+        )
+        assert unsupported_response.status_code == 415
+
+        missing_get_response = client.get(f"{base_url}/audiobooks/{missing_id}/cover")
+        assert missing_get_response.status_code == 404
+
+        missing_delete_response = client.delete(f"{base_url}/audiobooks/{missing_id}/cover")
+        assert missing_delete_response.status_code == 404
