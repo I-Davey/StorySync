@@ -27,6 +27,10 @@ class AppMeta(Base):
 
 class Audiobook(Base):
     __tablename__ = "audiobooks"
+    __table_args__ = (
+        CheckConstraint("file_size_bytes >= 0", name="ck_audiobooks_file_size_nonnegative"),
+        CheckConstraint("length(checksum_sha256) = 64", name="ck_audiobooks_checksum_length"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     original_filename: Mapped[str] = mapped_column(Text, nullable=False)
@@ -50,6 +54,16 @@ class ProcessingJob(Base):
     __tablename__ = "processing_jobs"
     __table_args__ = (
         CheckConstraint("state IN ('queued', 'processing', 'processed', 'failed', 'cancelled')", name="ck_processing_jobs_state"),
+        CheckConstraint("attempt_count >= 0", name="ck_processing_jobs_attempt_nonnegative"),
+        CheckConstraint(
+            "state != 'processing' OR (worker_id IS NOT NULL AND lease_expires_at IS NOT NULL)",
+            name="ck_processing_jobs_processing_has_lease",
+        ),
+        CheckConstraint(
+            "state NOT IN ('processed', 'failed', 'cancelled') OR "
+            "(worker_id IS NULL AND lease_expires_at IS NULL)",
+            name="ck_processing_jobs_terminal_fields_clear",
+        ),
         Index("idx_processing_jobs_state_created", "state", "created_at", "id"),
         Index("idx_processing_jobs_lease", "lease_expires_at"),
     )
