@@ -3,13 +3,14 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import ProcessingJob
+from app.services.queue import next_queue_position
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -51,21 +52,13 @@ def _get_job_or_404(db: Session, job_id: uuid.UUID) -> ProcessingJob:
     return job
 
 
-def _next_queue_position(db: Session) -> int:
-    db.execute(select(func.pg_advisory_xact_lock(730001)))
-    position = db.scalar(select(func.coalesce(func.max(ProcessingJob.queue_position), 0) + 1))
-    return int(position)
-
-
 @router.get("", response_model=JobListResponse)
 def list_jobs(
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     state: str | None = None,
     db: Session = Depends(get_db),
 ) -> JobListResponse:
-    page = max(page, 1)
-    page_size = max(page_size, 1)
     stmt = select(ProcessingJob)
     if state:
         stmt = stmt.where(ProcessingJob.state == state)
@@ -83,7 +76,7 @@ def get_job(job_id: uuid.UUID, db: Session = Depends(get_db)) -> JobResponse:
 @router.post("/{job_id}/cancel", response_model=JobResponse)
 def cancel_job(job_id: uuid.UUID, db: Session = Depends(get_db)) -> JobResponse:
     job = _get_job_or_404(db, job_id)
-    if job.state in {"processed", "cancelled"}:
+    if job.state not in {"received", "queued", "failed"}:
         raise HTTPException(status_code=409, detail=f"Cannot cancel job in state '{job.state}'")
 
     job.state = "cancelled"
@@ -103,7 +96,7 @@ def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)) -> JobResponse:
         raise HTTPException(status_code=409, detail=f"Cannot retry job in state '{job.state}'")
 
     job.state = "queued"
-    job.queue_position = _next_queue_position(db)
+    job.queue_position = next_queue_position(db)
     job.last_error = None
     job.worker_id = None
     job.lease_expires_at = None

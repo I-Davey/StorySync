@@ -4,15 +4,16 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Audiobook, ProcessingJob
 from app.services.covers import delete_manual_cover, extract_embedded_mp4_cover, replace_manual_cover
+from app.services.queue import next_queue_position
 from app.services.uploads import handle_upload
 
 router = APIRouter(prefix="/audiobooks", tags=["audiobooks"])
@@ -120,12 +121,6 @@ def _get_audiobook_or_404(db: Session, audiobook_id: uuid.UUID) -> Audiobook:
 
 def _get_job_for_audiobook(db: Session, audiobook_id: uuid.UUID) -> ProcessingJob | None:
     return db.execute(select(ProcessingJob).where(ProcessingJob.audiobook_id == audiobook_id)).scalar_one_or_none()
-
-
-def _next_queue_position(db: Session) -> int:
-    db.execute(select(func.pg_advisory_xact_lock(730001)))
-    position = db.scalar(select(func.coalesce(func.max(ProcessingJob.queue_position), 0) + 1))
-    return int(position)
 
 
 @router.post("/upload", response_model=UploadAudiobookResponse, status_code=201)
@@ -240,7 +235,7 @@ def reprocess_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) 
         setattr(audiobook, field_name, None)
 
     job.state = "queued"
-    job.queue_position = _next_queue_position(db)
+    job.queue_position = next_queue_position(db)
     job.worker_id = None
     job.lease_expires_at = None
     job.last_error = None
@@ -265,17 +260,17 @@ def download_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -
 
 @router.get("", response_model=AudiobookListResponse)
 def list_audiobooks(
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     state: str | None = None,
     db: Session = Depends(get_db),
 ) -> AudiobookListResponse:
-    offset = (max(page, 1) - 1) * max(page_size, 1)
+    offset = (page - 1) * page_size
     stmt = select(Audiobook, ProcessingJob).join(ProcessingJob, ProcessingJob.audiobook_id == Audiobook.id)
     if state:
         stmt = stmt.where(ProcessingJob.state == state)
-    stmt = stmt.order_by(Audiobook.created_at.desc()).offset(offset).limit(max(page_size, 1))
+    stmt = stmt.order_by(Audiobook.created_at.desc()).offset(offset).limit(page_size)
 
     rows = db.execute(stmt).all()
     items = [_audiobook_response(a, j) for a, j in rows]
-    return AudiobookListResponse(items=items, page=max(page, 1), page_size=max(page_size, 1))
+    return AudiobookListResponse(items=items, page=page, page_size=page_size)

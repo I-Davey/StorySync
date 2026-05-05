@@ -6,26 +6,20 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Audiobook, ProcessingJob
 from app.services.metadata import extract_m4b_metadata
+from app.services.queue import next_queue_position
 
 logger = logging.getLogger(__name__)
-QUEUE_LOCK_KEY = 730001
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _next_queue_position(db: Session) -> int:
-    db.execute(select(func.pg_advisory_xact_lock(QUEUE_LOCK_KEY)))
-    position = db.scalar(select(func.coalesce(func.max(ProcessingJob.queue_position), 0) + 1))
-    return int(position)
 
 
 def recover_expired_leases(db: Session, now: datetime | None = None) -> int:
@@ -46,7 +40,7 @@ def recover_expired_leases(db: Session, now: datetime | None = None) -> int:
 
     for job in expired:
         job.state = "queued"
-        job.queue_position = _next_queue_position(db)
+        job.queue_position = next_queue_position(db)
         job.worker_id = None
         job.lease_expires_at = None
         msg = "Lease expired; requeued for processing."
@@ -136,7 +130,7 @@ def complete_job_failure(
 
     if retryable and job.attempt_count < settings.processor_max_attempts:
         job.state = "queued"
-        job.queue_position = _next_queue_position(db)
+        job.queue_position = next_queue_position(db)
         job.worker_id = None
         job.lease_expires_at = None
         job.last_error = error_text

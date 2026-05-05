@@ -83,7 +83,7 @@ def test_recover_expired_leases_requeues_jobs(monkeypatch) -> None:
     ]
     db = _FakeDB([_ExecuteResult(many=jobs)])
     positions = iter([101, 102])
-    monkeypatch.setattr("app.services.processor._next_queue_position", lambda _db: next(positions))
+    monkeypatch.setattr("app.services.processor.next_queue_position", lambda _db: next(positions))
 
     count = processor.recover_expired_leases(db, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
 
@@ -117,7 +117,7 @@ def test_complete_job_failure_requeues_when_retryable(monkeypatch) -> None:
     )
     db = _FakeDB([_ExecuteResult(one=job)])
     monkeypatch.setattr("app.services.processor.settings.processor_max_attempts", 3)
-    monkeypatch.setattr("app.services.processor._next_queue_position", lambda _db: 55)
+    monkeypatch.setattr("app.services.processor.next_queue_position", lambda _db: 55)
 
     ok = processor.complete_job_failure(db, job.id, "w1", "boom", retryable=True)
 

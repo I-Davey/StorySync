@@ -8,12 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Audiobook, ProcessingJob
+from app.services.queue import next_queue_position
 
 CHUNK_SIZE = 1024 * 1024
 CHECKSUM_COLUMN = "checksum_sha256"
@@ -121,11 +121,8 @@ def handle_upload(db: Session, file: UploadFile) -> UploadResult:
         db.add(job)
         db.flush()
 
-        db.execute(select(func.pg_advisory_xact_lock(730001)))
-        next_queue_position = db.scalar(select(func.coalesce(func.max(ProcessingJob.queue_position), 0) + 1))
-
         job.state = "queued"
-        job.queue_position = int(next_queue_position)
+        job.queue_position = next_queue_position(db)
         db.commit()
         db.refresh(audiobook)
         db.refresh(job)

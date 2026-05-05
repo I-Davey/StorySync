@@ -3,9 +3,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
+from app.db import get_db
+from app.main import app
 from app.api.audiobooks import list_audiobooks
 from app.api.jobs import cancel_job, get_job, list_jobs, retry_job
 
@@ -91,7 +95,7 @@ def test_list_jobs_endpoint_returns_filtered_page() -> None:
 
 
 def test_cancel_job_clears_queue_and_worker_fields() -> None:
-    job = _job("processing", 5)
+    job = _job("queued", 5)
     db = _DummyDB(job=job)
 
     response = cancel_job(job_id=job.id, db=db)
@@ -105,6 +109,18 @@ def test_cancel_job_clears_queue_and_worker_fields() -> None:
 
 def test_cancel_processed_job_conflicts() -> None:
     job = _job("processed", None)
+    db = _DummyDB(job=job)
+
+    try:
+        cancel_job(job_id=job.id, db=db)
+    except HTTPException as exc:
+        assert exc.status_code == 409
+    else:
+        raise AssertionError("Expected HTTPException")
+
+
+def test_cancel_processing_job_conflicts() -> None:
+    job = _job("processing", None)
     db = _DummyDB(job=job)
 
     try:
@@ -178,3 +194,23 @@ def test_list_audiobooks_supports_state_filter_query_param() -> None:
     assert response.page == 1
     assert response.items[0].job is not None
     assert response.items[0].job.state == "queued"
+
+
+def test_list_pagination_query_bounds_are_enforced(monkeypatch) -> None:
+    monkeypatch.setattr("app.main.initialize_schema", MagicMock())
+    monkeypatch.setattr("app.main.settings.processor_enabled", False)
+    app.dependency_overrides[get_db] = lambda: None
+
+    try:
+        with TestClient(app) as client:
+            audiobook_bad_page = client.get("/audiobooks", params={"page": 0})
+            audiobook_bad_page_size = client.get("/audiobooks", params={"page_size": 101})
+            jobs_bad_page = client.get("/jobs", params={"page": 0})
+            jobs_bad_page_size = client.get("/jobs", params={"page_size": 0})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert audiobook_bad_page.status_code == 422
+    assert audiobook_bad_page_size.status_code == 422
+    assert jobs_bad_page.status_code == 422
+    assert jobs_bad_page_size.status_code == 422

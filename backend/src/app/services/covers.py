@@ -11,11 +11,12 @@ from app.config import settings
 from app.models import Audiobook
 
 ALLOWED_COVER_TYPES = {
-    "image/png": "png",
-    "image/jpeg": "jpg",
-    "image/webp": "webp",
+    "image/png": {"png"},
+    "image/jpeg": {"jpg", "jpeg"},
+    "image/webp": {"webp"},
 }
 CHUNK_SIZE = 1024 * 1024
+MAX_COVER_BYTES = 5 * 1024 * 1024
 
 
 def _cover_storage_dir() -> Path:
@@ -33,14 +34,41 @@ def _delete_cover_file(path: str | None) -> None:
         raise HTTPException(status_code=500, detail="Failed to delete cover file") from exc
 
 
-def replace_manual_cover(db: Session, audiobook: Audiobook, file: UploadFile) -> Audiobook:
-    media_type = file.content_type
-    extension = ALLOWED_COVER_TYPES.get(media_type or "")
-    if extension is None:
+def _detect_image_media_type(data: bytes) -> str | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _validate_cover_metadata(file: UploadFile) -> tuple[str, str]:
+    media_type = file.content_type or ""
+    allowed_extensions = ALLOWED_COVER_TYPES.get(media_type)
+    filename_extension = Path(file.filename or "").suffix.lower().lstrip(".")
+    if not allowed_extensions or filename_extension not in allowed_extensions:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="Only PNG, JPEG, and WebP cover images are accepted.",
         )
+
+    storage_extension = "jpg" if media_type == "image/jpeg" else filename_extension
+    return media_type, storage_extension
+
+
+def _validate_magic_bytes(data: bytes, expected_media_type: str) -> None:
+    detected_media_type = _detect_image_media_type(data)
+    if detected_media_type != expected_media_type:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Cover image bytes do not match the declared image type.",
+        )
+
+
+def replace_manual_cover(db: Session, audiobook: Audiobook, file: UploadFile) -> Audiobook:
+    media_type, extension = _validate_cover_metadata(file)
 
     cover_dir = _cover_storage_dir()
     final_path = cover_dir / f"{audiobook.id}.{extension}"
@@ -48,11 +76,25 @@ def replace_manual_cover(db: Session, audiobook: Audiobook, file: UploadFile) ->
 
     try:
         with temp_path.open("wb") as output:
+            total_bytes = 0
+            magic_checked = False
             while True:
                 chunk = file.file.read(CHUNK_SIZE)
                 if not chunk:
                     break
+                total_bytes += len(chunk)
+                if total_bytes > MAX_COVER_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Cover image exceeds maximum allowed size.",
+                    )
+                if not magic_checked:
+                    _validate_magic_bytes(chunk, media_type)
+                    magic_checked = True
                 output.write(chunk)
+
+            if not magic_checked:
+                _validate_magic_bytes(b"", media_type)
 
         old_path = audiobook.cover_path
         if old_path and Path(old_path) != final_path:
