@@ -181,3 +181,89 @@ def test_e2e_live_duplicate_upload_returns_conflict(
         )
         assert second.status_code == 409
         assert "Duplicate upload detected" in second.json()["detail"]
+
+
+def test_e2e_live_patch_reprocess_download_and_delete_audiobook(
+    live_backend_server,
+    generated_m4b_payload: bytes,
+) -> None:
+    base_url, _audio_dir = live_backend_server
+
+    with httpx.Client(timeout=10.0) as client:
+        upload_response = client.post(
+            f"{base_url}/audiobooks/upload",
+            files={"file": ("lifecycle-flow.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
+        )
+        assert upload_response.status_code == 201
+        uploaded = upload_response.json()
+        audiobook_id = uploaded["audiobook_id"]
+        stored_path = Path(uploaded["stored_path"])
+        assert stored_path.exists()
+
+        patch_response = client.patch(
+            f"{base_url}/audiobooks/{audiobook_id}",
+            json={
+                "metadata_title": "Manual Title",
+                "metadata_artist": "Manual Artist",
+                "metadata_year": 2026,
+            },
+        )
+        assert patch_response.status_code == 200
+        patched = patch_response.json()
+        assert patched["metadata_title"] == "Manual Title"
+        assert patched["metadata_artist"] == "Manual Artist"
+        assert patched["metadata_year"] == 2026
+        assert patched["metadata_album"] is None
+        assert patched["job"]["id"] == uploaded["job_id"]
+
+        download_response = client.get(f"{base_url}/audiobooks/{audiobook_id}/download")
+        assert download_response.status_code == 200
+        assert download_response.content == generated_m4b_payload
+        assert download_response.headers["content-type"].startswith("audio/mp4")
+        assert "attachment" in download_response.headers["content-disposition"]
+        assert "lifecycle-flow.m4b" in download_response.headers["content-disposition"]
+
+        reprocess_response = client.post(f"{base_url}/audiobooks/{audiobook_id}/reprocess")
+        assert reprocess_response.status_code == 200
+        reprocessed_job = reprocess_response.json()
+        assert reprocessed_job["id"] == uploaded["job_id"]
+        assert reprocessed_job["state"] == "queued"
+        assert reprocessed_job["queue_position"] is not None
+        assert reprocessed_job["worker_id"] is None
+        assert reprocessed_job["lease_expires_at"] is None
+        assert reprocessed_job["last_error"] is None
+
+        cleared_response = client.get(f"{base_url}/audiobooks/{audiobook_id}")
+        assert cleared_response.status_code == 200
+        cleared = cleared_response.json()
+        assert cleared["metadata_title"] is None
+        assert cleared["metadata_artist"] is None
+        assert cleared["metadata_year"] is None
+
+        delete_response = client.delete(f"{base_url}/audiobooks/{audiobook_id}")
+        assert delete_response.status_code == 204
+        assert not stored_path.exists()
+
+        missing_response = client.get(f"{base_url}/audiobooks/{audiobook_id}")
+        assert missing_response.status_code == 404
+
+
+def test_e2e_live_lifecycle_missing_audiobook_returns_404(live_backend_server) -> None:
+    base_url, _audio_dir = live_backend_server
+    missing_id = "00000000-0000-0000-0000-000000000404"
+
+    with httpx.Client(timeout=10.0) as client:
+        patch_response = client.patch(
+            f"{base_url}/audiobooks/{missing_id}",
+            json={"metadata_title": "Nope"},
+        )
+        assert patch_response.status_code == 404
+
+        reprocess_response = client.post(f"{base_url}/audiobooks/{missing_id}/reprocess")
+        assert reprocess_response.status_code == 404
+
+        download_response = client.get(f"{base_url}/audiobooks/{missing_id}/download")
+        assert download_response.status_code == 404
+
+        delete_response = client.delete(f"{base_url}/audiobooks/{missing_id}")
+        assert delete_response.status_code == 404
