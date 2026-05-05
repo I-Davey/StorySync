@@ -20,7 +20,6 @@ def test_canonical_upload_endpoint_returns_public_created_payload(monkeypatch, g
         checksum_sha256="a" * 64,
         job_id=uuid.uuid4(),
         job_state="queued",
-        queue_position=3,
     )
 
     def fake_handle_upload(db, file):
@@ -46,7 +45,7 @@ def test_canonical_upload_endpoint_returns_public_created_payload(monkeypatch, g
     assert data["audiobook_id"] == str(expected.audiobook_id)
     assert data["job_id"] == str(expected.job_id)
     assert data["job_state"] == "queued"
-    assert data["queue_position"] == 3
+    assert "queue_position" not in data
     assert data["download_url"] == f"/audiobooks/{expected.audiobook_id}/download"
     assert "stored_path" not in data
 
@@ -60,7 +59,6 @@ def test_upload_compatibility_alias_keeps_created_payload(monkeypatch, generated
         checksum_sha256="a" * 64,
         job_id=uuid.uuid4(),
         job_state="queued",
-        queue_position=3,
     )
 
     monkeypatch.setattr("app.api.audiobooks.handle_upload", lambda db, file: expected)
@@ -80,4 +78,5 @@ def test_upload_compatibility_alias_keeps_created_payload(monkeypatch, generated
     assert response.status_code == 201
     assert response.json()["audiobook_id"] == str(expected.audiobook_id)
     assert response.json()["download_url"] == f"/audiobooks/{expected.audiobook_id}/download"
+    assert "queue_position" not in response.json()
     assert "stored_path" not in response.json()

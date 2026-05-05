@@ -21,7 +21,7 @@ from app.schemas import (
     UploadAudiobookResponse,
 )
 from app.services.covers import delete_manual_cover, extract_embedded_mp4_cover, replace_manual_cover
-from app.services.queue import next_queue_position
+from app.services import jobs as job_service
 from app.services.uploads import handle_upload
 
 router = APIRouter(prefix="/audiobooks", tags=["audiobooks"])
@@ -32,7 +32,6 @@ def _job_response(job: ProcessingJob) -> JobResponse:
         id=job.id,
         audiobook_id=job.audiobook_id,
         state=job.state,
-        queue_position=job.queue_position,
         attempt_count=job.attempt_count,
         worker_id=job.worker_id,
         lease_expires_at=job.lease_expires_at,
@@ -76,7 +75,7 @@ def _get_audiobook_or_404(db: Session, audiobook_id: uuid.UUID) -> Audiobook:
 
 
 def _get_job_for_audiobook(db: Session, audiobook_id: uuid.UUID) -> ProcessingJob | None:
-    return db.execute(select(ProcessingJob).where(ProcessingJob.audiobook_id == audiobook_id)).scalar_one_or_none()
+    return job_service.get_job_for_audiobook(db, audiobook_id)
 
 
 def _upload_response(result) -> UploadAudiobookResponse:
@@ -87,7 +86,6 @@ def _upload_response(result) -> UploadAudiobookResponse:
         checksum_sha256=result.checksum_sha256,
         job_id=result.job_id,
         job_state=result.job_state,
-        queue_position=getattr(result, "queue_position", None),
         download_url=f"/audiobooks/{result.audiobook_id}/download",
     )
 
@@ -192,26 +190,10 @@ def reprocess_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) 
     if job is None:
         raise HTTPException(status_code=404, detail="Processing job not found")
 
-    for field_name in (
-        "metadata_title",
-        "metadata_album",
-        "metadata_artist",
-        "metadata_genre",
-        "metadata_duration_seconds",
-        "metadata_track_number",
-        "metadata_year",
-        "metadata_raw",
-    ):
-        setattr(audiobook, field_name, None)
-
-    job.state = "queued"
-    job.queue_position = next_queue_position(db)
-    job.worker_id = None
-    job.lease_expires_at = None
-    job.last_error = None
-
-    db.commit()
-    db.refresh(job)
+    try:
+        job = job_service.reprocess_audiobook(db, audiobook, job)
+    except job_service.JobTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _job_response(job)
 
 

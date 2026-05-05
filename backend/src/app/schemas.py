@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 
 
 class JobState(str, Enum):
-    received = "received"
     queued = "queued"
     processing = "processing"
     processed = "processed"
@@ -20,7 +19,6 @@ class JobResponse(BaseModel):
     id: uuid.UUID
     audiobook_id: uuid.UUID
     state: JobState
-    queue_position: int | None
     attempt_count: int
     worker_id: str | None = None
     lease_expires_at: datetime | None = None
@@ -56,7 +54,6 @@ class UploadAudiobookResponse(BaseModel):
     checksum_sha256: str
     job_id: uuid.UUID
     job_state: JobState
-    queue_position: int | None = None
     download_url: str
 
 

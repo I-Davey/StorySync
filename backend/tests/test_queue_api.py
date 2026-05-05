@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.db import get_db
 from app.main import app
-from app.api.audiobooks import list_audiobooks
+from app.api.audiobooks import list_audiobooks, reprocess_audiobook
 from app.api.jobs import cancel_job, get_job, list_jobs, retry_job
 from app.schemas import JobState
 
@@ -57,7 +57,6 @@ def test_get_job_endpoint_returns_job() -> None:
             id=job_id,
             audiobook_id=audiobook_id,
             state="queued",
-            queue_position=7,
             attempt_count=0,
             worker_id=None,
             lease_expires_at=None,
@@ -67,15 +66,14 @@ def test_get_job_endpoint_returns_job() -> None:
 
     response = get_job(job_id=job_id, db=db)
 
-    assert response.queue_position == 7
+    assert not hasattr(response, "queue_position")
 
 
-def _job(state: str, queue_position: int | None = 1):
+def _job(state: str):
     return SimpleNamespace(
         id=uuid.uuid4(),
         audiobook_id=uuid.uuid4(),
         state=state,
-        queue_position=queue_position,
         attempt_count=2,
         worker_id="worker-1",
         lease_expires_at=datetime.now(timezone.utc),
@@ -84,7 +82,7 @@ def _job(state: str, queue_position: int | None = 1):
 
 
 def test_list_jobs_endpoint_returns_filtered_page() -> None:
-    job = _job("queued", 5)
+    job = _job("queued")
     db = _DummyDB(list_rows=[(job,)])
 
     response = list_jobs(page=1, page_size=10, state=JobState.queued, db=db)
@@ -93,23 +91,23 @@ def test_list_jobs_endpoint_returns_filtered_page() -> None:
     assert response.page_size == 10
     assert response.items[0].id == job.id
     assert response.items[0].state == "queued"
+    assert not hasattr(response.items[0], "queue_position")
 
 
 def test_cancel_job_clears_queue_and_worker_fields() -> None:
-    job = _job("queued", 5)
+    job = _job("queued")
     db = _DummyDB(job=job)
 
     response = cancel_job(job_id=job.id, db=db)
 
     assert response.state == "cancelled"
-    assert response.queue_position is None
     assert response.worker_id is None
     assert response.lease_expires_at is None
     assert db.committed
 
 
 def test_cancel_processed_job_conflicts() -> None:
-    job = _job("processed", None)
+    job = _job("processed")
     db = _DummyDB(job=job)
 
     try:
@@ -121,7 +119,7 @@ def test_cancel_processed_job_conflicts() -> None:
 
 
 def test_cancel_processing_job_conflicts() -> None:
-    job = _job("processing", None)
+    job = _job("processing")
     db = _DummyDB(job=job)
 
     try:
@@ -133,13 +131,12 @@ def test_cancel_processing_job_conflicts() -> None:
 
 
 def test_retry_cancelled_job_requeues_without_resetting_attempt_count() -> None:
-    job = _job("cancelled", None)
+    job = _job("cancelled")
     db = _DummyDB(job=job)
 
     response = retry_job(job_id=job.id, db=db)
 
     assert response.state == "queued"
-    assert response.queue_position == 42
     assert response.attempt_count == 2
     assert response.worker_id is None
     assert response.lease_expires_at is None
@@ -148,11 +145,39 @@ def test_retry_cancelled_job_requeues_without_resetting_attempt_count() -> None:
 
 
 def test_retry_queued_job_conflicts() -> None:
-    job = _job("queued", 1)
+    job = _job("queued")
     db = _DummyDB(job=job)
 
     try:
         retry_job(job_id=job.id, db=db)
+    except HTTPException as exc:
+        assert exc.status_code == 409
+    else:
+        raise AssertionError("Expected HTTPException")
+
+
+def test_reprocess_queued_job_conflicts() -> None:
+    audiobook = SimpleNamespace(id=uuid.uuid4())
+    job = _job("queued")
+    job.audiobook_id = audiobook.id
+    db = _DummyDB(audiobook=audiobook, job=job)
+
+    try:
+        reprocess_audiobook(audiobook_id=audiobook.id, db=db)
+    except HTTPException as exc:
+        assert exc.status_code == 409
+    else:
+        raise AssertionError("Expected HTTPException")
+
+
+def test_reprocess_processing_job_conflicts() -> None:
+    audiobook = SimpleNamespace(id=uuid.uuid4())
+    job = _job("processing")
+    job.audiobook_id = audiobook.id
+    db = _DummyDB(audiobook=audiobook, job=job)
+
+    try:
+        reprocess_audiobook(audiobook_id=audiobook.id, db=db)
     except HTTPException as exc:
         assert exc.status_code == 409
     else:
@@ -182,7 +207,6 @@ def test_list_audiobooks_supports_state_filter_query_param() -> None:
         id=job_id,
         audiobook_id=audiobook_id,
         state="queued",
-        queue_position=1,
         attempt_count=0,
         worker_id=None,
         lease_expires_at=None,

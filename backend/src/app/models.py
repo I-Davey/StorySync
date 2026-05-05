@@ -49,11 +49,8 @@ class Audiobook(Base):
 class ProcessingJob(Base):
     __tablename__ = "processing_jobs"
     __table_args__ = (
-        CheckConstraint(
-            "state IN ('received', 'queued', 'processing', 'processed', 'failed', 'cancelled')",
-            name="ck_processing_jobs_state",
-        ),
-        Index("idx_processing_jobs_state_queue", "state", "queue_position"),
+        CheckConstraint("state IN ('queued', 'processing', 'processed', 'failed', 'cancelled')", name="ck_processing_jobs_state"),
+        Index("idx_processing_jobs_state_created", "state", "created_at", "id"),
         Index("idx_processing_jobs_lease", "lease_expires_at"),
     )
 
@@ -65,7 +62,6 @@ class ProcessingJob(Base):
         unique=True,
     )
     state: Mapped[str] = mapped_column(String(16), nullable=False)
-    queue_position: Mapped[int | None] = mapped_column(BigInteger)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     last_error: Mapped[str | None] = mapped_column(Text)
     worker_id: Mapped[str | None] = mapped_column(Text)

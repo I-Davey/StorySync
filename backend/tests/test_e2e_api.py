@@ -231,12 +231,19 @@ def test_e2e_live_patch_reprocess_download_and_delete_audiobook(
         assert "attachment" in download_response.headers["content-disposition"]
         assert "lifecycle-flow.m4b" in download_response.headers["content-disposition"]
 
+        reprocess_queued_response = client.post(f"{base_url}/audiobooks/{audiobook_id}/reprocess")
+        assert reprocess_queued_response.status_code == 409
+
+        cancel_response = client.post(f"{base_url}/jobs/{uploaded['job_id']}/cancel")
+        assert cancel_response.status_code == 200
+        assert cancel_response.json()["state"] == "cancelled"
+
         reprocess_response = client.post(f"{base_url}/audiobooks/{audiobook_id}/reprocess")
         assert reprocess_response.status_code == 200
         reprocessed_job = reprocess_response.json()
         assert reprocessed_job["id"] == uploaded["job_id"]
         assert reprocessed_job["state"] == "queued"
-        assert reprocessed_job["queue_position"] is not None
+        assert "queue_position" not in reprocessed_job
         assert reprocessed_job["worker_id"] is None
         assert reprocessed_job["lease_expires_at"] is None
         assert reprocessed_job["last_error"] is None
@@ -308,7 +315,7 @@ def test_e2e_live_job_admin_list_cancel_retry_errors(
         assert cancel_response.status_code == 200
         cancelled = cancel_response.json()
         assert cancelled["state"] == "cancelled"
-        assert cancelled["queue_position"] is None
+        assert "queue_position" not in cancelled
         assert cancelled["worker_id"] is None
         assert cancelled["lease_expires_at"] is None
 
@@ -321,7 +328,7 @@ def test_e2e_live_job_admin_list_cancel_retry_errors(
         assert retry_response.status_code == 200
         retried = retry_response.json()
         assert retried["state"] == "queued"
-        assert retried["queue_position"] is not None
+        assert "queue_position" not in retried
         assert retried["last_error"] is None
         assert retried["worker_id"] is None
         assert retried["lease_expires_at"] is None
@@ -333,7 +340,7 @@ def test_e2e_live_job_admin_list_cancel_retry_errors(
 
         with psycopg.connect(postgres_ready.replace("postgresql+psycopg://", "postgresql://")) as conn:
             conn.execute(
-                "UPDATE processing_jobs SET state = 'processed', queue_position = NULL WHERE id = %s",
+                "UPDATE processing_jobs SET state = 'processed' WHERE id = %s",
                 (job_id,),
             )
             conn.commit()

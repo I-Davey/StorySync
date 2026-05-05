@@ -45,10 +45,6 @@ class _IntegrationDB:
         # advisory lock query is ignored in this integration stub
         return _ScalarResult(value=1)
 
-    def scalar(self, _stmt) -> int:
-        current_max = max((job.queue_position or 0) for job in self.jobs) if self.jobs else 0
-        return current_max + 1
-
     def commit(self) -> None:
         self.commits += 1
 
@@ -68,8 +64,8 @@ def test_handle_upload_end_to_end_with_generated_fixture(tmp_path: Path, generat
     result = handle_upload(db, upload)
 
     assert result.original_filename == "runtime-generated.m4b"
-    assert result.queue_position == 1
     assert result.job_state == "queued"
+    assert not hasattr(result, "queue_position")
     assert result.file_size_bytes == len(generated_m4b_payload)
 
     stored_file = Path(result.stored_path)
@@ -80,5 +76,6 @@ def test_handle_upload_end_to_end_with_generated_fixture(tmp_path: Path, generat
     assert len(db.audiobooks) == 1
     assert len(db.jobs) == 1
     assert db.jobs[0].audiobook_id == db.audiobooks[0].id
+    assert db.jobs[0].state == "queued"
     assert db.commits == 1
     assert db.rollbacks == 0
