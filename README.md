@@ -47,7 +47,8 @@ The compose stack uses:
 Core endpoints:
 
 - `GET /health`
-- `POST /audiobooks/upload`
+- `POST /audiobooks` — upload/create audiobook
+- `POST /audiobooks/upload` — compatibility alias for upload
 - `GET /audiobooks`
 - `GET /audiobooks/{audiobook_id}`
 - `PATCH /audiobooks/{audiobook_id}`
