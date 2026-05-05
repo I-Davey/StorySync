@@ -182,6 +182,28 @@ def test_e2e_live_upload_then_fetch_job_and_audiobook(
         assert len(listed["items"]) == 1
         assert listed["items"][0]["id"] == uploaded["audiobook_id"]
 
+        progress_response = client.put(
+            f"{base_url}/audiobooks/{uploaded['audiobook_id']}/progress",
+            json={"position_seconds": 42, "duration_seconds": 3600},
+        )
+        assert progress_response.status_code == 200
+        progress = progress_response.json()
+        assert progress["audiobook_id"] == uploaded["audiobook_id"]
+        assert progress["position_seconds"] == 42
+        assert progress["duration_seconds"] == 3600
+        assert progress["is_completed"] is False
+        assert "password_hash" not in progress_response.text
+        assert "stored_path" not in progress_response.text
+
+        continue_response = client.get(f"{base_url}/me/continue-listening")
+        assert continue_response.status_code == 200
+        assert [item["audiobook_id"] for item in continue_response.json()["items"]] == [uploaded["audiobook_id"]]
+
+        delete_progress_response = client.delete(f"{base_url}/audiobooks/{uploaded['audiobook_id']}/progress")
+        assert delete_progress_response.status_code == 204
+        missing_progress_response = client.get(f"{base_url}/audiobooks/{uploaded['audiobook_id']}/progress")
+        assert missing_progress_response.status_code == 404
+
 
 def test_e2e_live_duplicate_upload_returns_conflict(
     live_backend_server,

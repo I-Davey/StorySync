@@ -8,6 +8,7 @@ from app.api.auth import router as auth_router
 from app.api.audiobooks import router as audiobooks_router
 from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
+from app.api.progress import router as progress_router
 from app.config import settings
 from app.db import SessionLocal
 from app.schema_init import initialize_schema
@@ -41,5 +42,6 @@ app = FastAPI(title="StorySync Backend", lifespan=lifespan)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(admin_users_router)
+app.include_router(progress_router)
 app.include_router(audiobooks_router)
 app.include_router(jobs_router)

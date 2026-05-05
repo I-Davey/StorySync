@@ -103,6 +103,7 @@ class UserAudiobookProgress(Base):
         nullable=False,
     )
     position_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)
     completed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     completed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

@@ -4,7 +4,7 @@ from sqlalchemy.dialects.postgresql import insert
 from app.db import engine
 from app.models import AppMeta, Base
 
-SCHEMA_VERSION = "11"
+SCHEMA_VERSION = "12"
 SCHEMA_INIT_LOCK_KEY = 2026050510
 
 
@@ -22,6 +22,7 @@ def initialize_schema() -> None:
         Base.metadata.create_all(bind=connection)
 
         connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT"))
+        connection.execute(text("ALTER TABLE user_audiobook_progress ADD COLUMN IF NOT EXISTS duration_seconds INTEGER"))
 
         connection.execute(text("ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS cover_path TEXT"))
         connection.execute(text("ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS cover_media_type VARCHAR(64)"))
@@ -47,6 +48,11 @@ def initialize_schema() -> None:
                 "user_audiobook_progress",
                 "ck_user_audiobook_progress_position_nonnegative",
                 "position_seconds >= 0",
+            ),
+            (
+                "user_audiobook_progress",
+                "ck_user_audiobook_progress_duration_nonnegative",
+                "duration_seconds IS NULL OR duration_seconds >= 0",
             ),
             (
                 "user_audiobook_progress",
