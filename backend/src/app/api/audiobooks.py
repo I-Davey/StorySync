@@ -17,6 +17,7 @@ from app.schemas import (
     CoverResource,
     JobResponse,
     JobState,
+    PublicJobSummary,
     UpdateAudiobookRequest,
     UploadAudiobookResponse,
 )
@@ -37,6 +38,15 @@ def _job_response(job: ProcessingJob) -> JobResponse:
         worker_id=job.worker_id,
         lease_expires_at=job.lease_expires_at,
         last_error=job.last_error,
+    )
+
+
+def _public_job_summary(job: ProcessingJob) -> PublicJobSummary:
+    return PublicJobSummary(
+        id=job.id,
+        audiobook_id=job.audiobook_id,
+        state=job.state,
+        attempt_count=job.attempt_count,
     )
 
 
@@ -64,7 +74,7 @@ def _audiobook_response(audiobook: Audiobook, job: ProcessingJob | None = None) 
         cover=cover,
         download_url=f"{audiobook_url}/download",
         created_at=audiobook.created_at,
-        job=_job_response(job) if job else None,
+        job=_public_job_summary(job) if job else None,
     )
 
 

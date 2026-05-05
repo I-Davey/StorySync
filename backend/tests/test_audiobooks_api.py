@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import uuid
 from io import BytesIO
 from unittest.mock import MagicMock
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.db import get_db
 from app.main import app
+from app.models import Audiobook, ProcessingJob
 from app.services.uploads import UploadResult
 
 
@@ -142,3 +144,75 @@ def test_upload_compatibility_alias_keeps_created_payload(monkeypatch, override_
     assert response.json()["download_url"] == f"/audiobooks/{expected.audiobook_id}/download"
     assert "queue_position" not in response.json()
     assert "stored_path" not in response.json()
+
+
+def _audiobook_and_job() -> tuple[Audiobook, ProcessingJob]:
+    audiobook_id = uuid.uuid4()
+    audiobook = Audiobook(
+        id=audiobook_id,
+        original_filename="book.m4b",
+        stored_path="/data/audio/book.m4b",
+        file_size_bytes=2048,
+        checksum_sha256="a" * 64,
+        created_at=dt.datetime.now(dt.UTC),
+    )
+    job = ProcessingJob(
+        id=uuid.uuid4(),
+        audiobook_id=audiobook_id,
+        state="processing",
+        attempt_count=2,
+        worker_id="worker-1",
+        lease_expires_at=dt.datetime.now(dt.UTC) + dt.timedelta(minutes=5),
+        last_error="sensitive stack trace",
+    )
+    return audiobook, job
+
+
+def test_audiobook_detail_returns_public_job_summary_without_worker_internals(monkeypatch, override_auth) -> None:
+    monkeypatch.setattr("app.main.initialize_schema", MagicMock())
+    monkeypatch.setattr("app.main.settings.processor_enabled", False)
+    audiobook, job = _audiobook_and_job()
+    monkeypatch.setattr("app.api.audiobooks._get_audiobook_or_404", lambda db, audiobook_id: audiobook)
+    monkeypatch.setattr("app.api.audiobooks._get_job_for_audiobook", lambda db, audiobook_id: job)
+    override_auth()
+    app.dependency_overrides[get_db] = lambda: None
+
+    try:
+        with TestClient(app) as client:
+            response = client.get(f"/audiobooks/{audiobook.id}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["job"] == {"id": str(job.id), "audiobook_id": str(audiobook.id), "state": "processing", "attempt_count": 2}
+
+
+def test_audiobook_list_returns_public_job_summary_without_worker_internals(monkeypatch, override_auth) -> None:
+    monkeypatch.setattr("app.main.initialize_schema", MagicMock())
+    monkeypatch.setattr("app.main.settings.processor_enabled", False)
+    audiobook, job = _audiobook_and_job()
+
+    class _Result:
+        def all(self):
+            return [(audiobook, job)]
+
+    class _Db:
+        def execute(self, stmt):
+            return _Result()
+
+    override_auth()
+    app.dependency_overrides[get_db] = lambda: _Db()
+
+    try:
+        with TestClient(app) as client:
+            response = client.get("/audiobooks")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["job"] == {
+        "id": str(job.id),
+        "audiobook_id": str(audiobook.id),
+        "state": "processing",
+        "attempt_count": 2,
+    }

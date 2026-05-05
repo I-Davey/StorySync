@@ -3,6 +3,9 @@ from __future__ import annotations
 import datetime as dt
 from unittest.mock import MagicMock
 
+import pytest
+from pydantic import ValidationError
+
 from app.config import Settings
 from app.services.auth import (
     bootstrap_first_admin,
@@ -10,6 +13,7 @@ from app.services.auth import (
     decode_access_token,
     hash_password,
     normalize_email,
+    validate_password,
     verify_password,
 )
 
@@ -39,6 +43,20 @@ def test_access_token_round_trip_and_tampering_rejected() -> None:
     assert payload["sub"] == "user-123"
     assert payload["exp"] > int(dt.datetime.now(dt.UTC).timestamp())
     assert decode_access_token(token + "tampered", settings=settings) is None
+
+
+def test_explicit_blank_auth_token_secret_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            database_url="postgresql+psycopg://test:test@localhost/test",
+            auth_token_secret="   ",
+        )
+
+
+def test_generated_auth_token_secret_default_remains_available() -> None:
+    settings = Settings(database_url="postgresql+psycopg://test:test@localhost/test")
+
+    assert settings.auth_token_secret.strip()
 
 
 def test_expired_access_token_rejected() -> None:
@@ -72,6 +90,30 @@ def test_bootstrap_first_admin_creates_admin_when_no_users_and_password_present(
     db.add.assert_called_once_with(created)
     db.commit.assert_called_once()
     db.refresh.assert_called_once_with(created)
+
+
+def test_password_policy_rejects_short_and_whitespace_only_passwords() -> None:
+    validate_password("abcdefgh")
+
+    with pytest.raises(ValueError, match="at least 8"):
+        validate_password("short")
+
+    with pytest.raises(ValueError, match="not be whitespace"):
+        validate_password("        ")
+
+
+def test_bootstrap_first_admin_rejects_invalid_configured_password() -> None:
+    settings = Settings(
+        database_url="postgresql+psycopg://test:test@localhost/test",
+        storysync_admin_password="short",
+    )
+    db = MagicMock()
+    db.query.return_value.count.return_value = 0
+
+    with pytest.raises(ValueError):
+        bootstrap_first_admin(db, settings=settings)
+
+    db.add.assert_not_called()
 
 
 def test_bootstrap_first_admin_noops_when_users_exist_or_password_missing() -> None:

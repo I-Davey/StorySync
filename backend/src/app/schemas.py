@@ -25,6 +25,13 @@ class JobResponse(BaseModel):
     last_error: str | None = None
 
 
+class PublicJobSummary(BaseModel):
+    id: uuid.UUID
+    audiobook_id: uuid.UUID
+    state: JobState
+    attempt_count: int
+
+
 class JobListResponse(BaseModel):
     items: list[JobResponse]
     page: int
@@ -66,7 +73,7 @@ class AudiobookResponse(BaseModel):
     cover: CoverResource | None = None
     download_url: str
     created_at: datetime
-    job: JobResponse | None = None
+    job: PublicJobSummary | None = None
 
 
 class AudiobookListResponse(BaseModel):

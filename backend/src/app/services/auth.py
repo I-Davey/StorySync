@@ -15,10 +15,18 @@ from app.models import User
 
 PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
 PASSWORD_HASH_ITERATIONS = 260_000
+MIN_PASSWORD_LENGTH = 8
 
 
 def normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+def validate_password(password: str) -> None:
+    if not password.strip():
+        raise ValueError("Password must not be whitespace-only")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
 
 
 def _b64encode(raw: bytes) -> str:
@@ -31,6 +39,7 @@ def _b64decode(value: str) -> bytes:
 
 
 def hash_password(password: str) -> str:
+    validate_password(password)
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PASSWORD_HASH_ITERATIONS)
     return f"{PASSWORD_HASH_ALGORITHM}${PASSWORD_HASH_ITERATIONS}${_b64encode(salt)}${_b64encode(digest)}"

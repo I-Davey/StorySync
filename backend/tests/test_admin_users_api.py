@@ -145,6 +145,27 @@ def test_admin_can_create_user_with_normalized_email_defaults_and_hashed_passwor
     assert verify_password("new-password", db.users[0].password_hash)
 
 
+def test_admin_create_and_reset_password_apply_mvp_password_policy(monkeypatch) -> None:
+    monkeypatch.setattr("app.main.initialize_schema", MagicMock())
+    monkeypatch.setattr("app.main.bootstrap_first_admin", MagicMock())
+    monkeypatch.setattr("app.main.settings.processor_enabled", False)
+    user = _user(email="target@mail.com")
+    db = _AdminUsersDb([user])
+
+    try:
+        with _client(db) as client:
+            short_create = client.post("/admin/users", json={"email": "new@mail.com", "password": "short"})
+            whitespace_create = client.post("/admin/users", json={"email": "blank@mail.com", "password": "        "})
+            short_reset = client.post(f"/admin/users/{user.id}/reset-password", json={"password": "short"})
+    finally:
+        _clear_overrides()
+
+    assert short_create.status_code == 422
+    assert whitespace_create.status_code == 422
+    assert short_reset.status_code == 422
+    assert len(db.users) == 1
+
+
 def test_admin_can_create_explicit_admin_and_duplicate_email_conflicts(monkeypatch) -> None:
     monkeypatch.setattr("app.main.initialize_schema", MagicMock())
     monkeypatch.setattr("app.main.bootstrap_first_admin", MagicMock())
@@ -226,3 +247,45 @@ def test_admin_can_patch_deactivate_and_reset_password(monkeypatch) -> None:
     assert verify_password("new-password", user.password_hash)
     assert "password_hash" not in reset.json()
     assert missing.status_code == 404
+
+
+def test_admin_cannot_demote_or_deactivate_last_active_admin(monkeypatch) -> None:
+    monkeypatch.setattr("app.main.initialize_schema", MagicMock())
+    monkeypatch.setattr("app.main.bootstrap_first_admin", MagicMock())
+    monkeypatch.setattr("app.main.settings.processor_enabled", False)
+    last_admin = _user(email="admin@mail.com", is_admin=True, is_active=True)
+    db = _AdminUsersDb([last_admin, _user(email="user@mail.com", is_admin=False, is_active=True)])
+
+    try:
+        with _client(db) as client:
+            demote = client.patch(f"/admin/users/{last_admin.id}", json={"is_admin": False})
+            patch_deactivate = client.patch(f"/admin/users/{last_admin.id}", json={"is_active": False})
+            deactivate = client.post(f"/admin/users/{last_admin.id}/deactivate")
+    finally:
+        _clear_overrides()
+
+    assert demote.status_code == 409
+    assert patch_deactivate.status_code == 409
+    assert deactivate.status_code == 409
+    assert last_admin.is_admin is True
+    assert last_admin.is_active is True
+
+
+def test_admin_can_demote_or_deactivate_admin_when_another_active_admin_remains(monkeypatch) -> None:
+    monkeypatch.setattr("app.main.initialize_schema", MagicMock())
+    monkeypatch.setattr("app.main.bootstrap_first_admin", MagicMock())
+    monkeypatch.setattr("app.main.settings.processor_enabled", False)
+    target = _user(email="target-admin@mail.com", is_admin=True, is_active=True)
+    other_admin = _user(email="other-admin@mail.com", is_admin=True, is_active=True)
+    db = _AdminUsersDb([target, other_admin])
+
+    try:
+        with _client(db) as client:
+            demote = client.patch(f"/admin/users/{target.id}", json={"is_admin": False})
+            target.is_admin = True
+            deactivate = client.post(f"/admin/users/{target.id}/deactivate")
+    finally:
+        _clear_overrides()
+
+    assert demote.status_code == 200
+    assert deactivate.status_code == 200

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.dependencies import require_admin
 from app.models import User
-from app.services.auth import hash_password, normalize_email
+from app.services.auth import hash_password, normalize_email, validate_password
 
 router = APIRouter(prefix="/admin/users", tags=["admin-users"], dependencies=[Depends(require_admin)])
 
@@ -57,8 +57,35 @@ def _get_user_or_404(db: Session, user_id: uuid.UUID) -> User:
     return user
 
 
+def _validate_password_or_422(password: str) -> None:
+    try:
+        validate_password(password)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _active_admin_count(db: Session) -> int:
+    return sum(1 for user in db.query(User).all() if user.is_admin and user.is_active)
+
+
+def _ensure_not_last_active_admin_removal(
+    db: Session,
+    user: User,
+    *,
+    is_admin: bool | None = None,
+    is_active: bool | None = None,
+) -> None:
+    if not (user.is_admin and user.is_active):
+        return
+    will_be_admin = user.is_admin if is_admin is None else is_admin
+    will_be_active = user.is_active if is_active is None else is_active
+    if (not will_be_admin or not will_be_active) and _active_admin_count(db) <= 1:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot remove the last active admin")
+
+
 @router.post("", response_model=AdminUserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(payload: AdminUserCreateRequest, db: Session = Depends(get_db)) -> AdminUserResponse:
+    _validate_password_or_422(payload.password)
     email = normalize_email(payload.email)
     if db.query(User).filter(User.email == email).first() is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
@@ -99,6 +126,12 @@ def get_user(user_id: uuid.UUID, db: Session = Depends(get_db)) -> AdminUserResp
 def update_user(user_id: uuid.UUID, payload: AdminUserUpdateRequest, db: Session = Depends(get_db)) -> AdminUserResponse:
     user = _get_user_or_404(db, user_id)
     updates = payload.model_dump(exclude_unset=True)
+    _ensure_not_last_active_admin_removal(
+        db,
+        user,
+        is_admin=updates.get("is_admin"),
+        is_active=updates.get("is_active"),
+    )
     if "display_name" in updates:
         user.display_name = updates["display_name"]
     if "is_admin" in updates:
@@ -113,6 +146,7 @@ def update_user(user_id: uuid.UUID, payload: AdminUserUpdateRequest, db: Session
 @router.post("/{user_id}/deactivate", response_model=AdminUserResponse)
 def deactivate_user(user_id: uuid.UUID, db: Session = Depends(get_db)) -> AdminUserResponse:
     user = _get_user_or_404(db, user_id)
+    _ensure_not_last_active_admin_removal(db, user, is_active=False)
     user.is_active = False
     db.commit()
     db.refresh(user)
@@ -125,6 +159,7 @@ def reset_password(
     payload: AdminUserResetPasswordRequest,
     db: Session = Depends(get_db),
 ) -> AdminUserResponse:
+    _validate_password_or_422(payload.password)
     user = _get_user_or_404(db, user_id)
     user.password_hash = hash_password(payload.password)
     db.commit()

@@ -1,6 +1,6 @@
 import secrets
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     auth_token_ttl_seconds: int = 86400
     storysync_admin_email: str = "admin@mail.com"
     storysync_admin_password: str = ""
+
+    @field_validator("auth_token_secret")
+    @classmethod
+    def auth_token_secret_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("AUTH_TOKEN_SECRET must not be empty or whitespace")
+        return value
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 
