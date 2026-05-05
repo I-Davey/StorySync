@@ -1,80 +1,30 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Audiobook, ProcessingJob
+from app.schemas import (
+    AudiobookListResponse,
+    AudiobookMetadata,
+    AudiobookResponse,
+    CoverResource,
+    JobResponse,
+    JobState,
+    UpdateAudiobookRequest,
+    UploadAudiobookResponse,
+)
 from app.services.covers import delete_manual_cover, extract_embedded_mp4_cover, replace_manual_cover
 from app.services.queue import next_queue_position
 from app.services.uploads import handle_upload
 
 router = APIRouter(prefix="/audiobooks", tags=["audiobooks"])
-
-
-class UploadAudiobookResponse(BaseModel):
-    audiobook_id: uuid.UUID = Field(description="Created audiobook identifier")
-    original_filename: str
-    stored_path: str
-    file_size_bytes: int
-    checksum_sha256: str
-    job_id: uuid.UUID
-    job_state: str
-    queue_position: int | None = None
-
-
-class JobResponse(BaseModel):
-    id: uuid.UUID
-    audiobook_id: uuid.UUID
-    state: str
-    queue_position: int | None
-    attempt_count: int
-    worker_id: str | None = None
-    lease_expires_at: datetime | None = None
-    last_error: str | None = None
-
-
-class AudiobookResponse(BaseModel):
-    id: uuid.UUID
-    original_filename: str
-    stored_path: str
-    file_size_bytes: int
-    checksum_sha256: str
-    metadata_title: str | None = None
-    metadata_album: str | None = None
-    metadata_artist: str | None = None
-    metadata_genre: str | None = None
-    metadata_duration_seconds: int | None = None
-    metadata_track_number: int | None = None
-    metadata_year: int | None = None
-    metadata_raw: dict | None = None
-    cover_path: str | None = None
-    cover_media_type: str | None = None
-    created_at: datetime
-    job: JobResponse | None = None
-
-
-class AudiobookListResponse(BaseModel):
-    items: list[AudiobookResponse]
-    page: int
-    page_size: int
-
-
-class UpdateAudiobookRequest(BaseModel):
-    metadata_title: str | None = None
-    metadata_album: str | None = None
-    metadata_artist: str | None = None
-    metadata_genre: str | None = None
-    metadata_duration_seconds: int | None = Field(default=None, ge=0)
-    metadata_track_number: int | None = Field(default=None, ge=0)
-    metadata_year: int | None = Field(default=None, ge=0)
 
 
 def _job_response(job: ProcessingJob) -> JobResponse:
@@ -91,22 +41,28 @@ def _job_response(job: ProcessingJob) -> JobResponse:
 
 
 def _audiobook_response(audiobook: Audiobook, job: ProcessingJob | None = None) -> AudiobookResponse:
+    audiobook_url = f"/audiobooks/{audiobook.id}"
+    cover = None
+    if getattr(audiobook, "cover_path", None):
+        cover = CoverResource(url=f"{audiobook_url}/cover", media_type=getattr(audiobook, "cover_media_type", None))
+
     return AudiobookResponse(
         id=audiobook.id,
         original_filename=audiobook.original_filename,
-        stored_path=audiobook.stored_path,
         file_size_bytes=audiobook.file_size_bytes,
         checksum_sha256=audiobook.checksum_sha256,
-        metadata_title=audiobook.metadata_title,
-        metadata_album=audiobook.metadata_album,
-        metadata_artist=audiobook.metadata_artist,
-        metadata_genre=audiobook.metadata_genre,
-        metadata_duration_seconds=audiobook.metadata_duration_seconds,
-        metadata_track_number=audiobook.metadata_track_number,
-        metadata_year=audiobook.metadata_year,
-        metadata_raw=audiobook.metadata_raw,
-        cover_path=getattr(audiobook, "cover_path", None),
-        cover_media_type=getattr(audiobook, "cover_media_type", None),
+        metadata=AudiobookMetadata(
+            title=audiobook.metadata_title,
+            album=audiobook.metadata_album,
+            artist=audiobook.metadata_artist,
+            genre=audiobook.metadata_genre,
+            duration_seconds=audiobook.metadata_duration_seconds,
+            track_number=audiobook.metadata_track_number,
+            year=audiobook.metadata_year,
+            raw=audiobook.metadata_raw,
+        ),
+        cover=cover,
+        download_url=f"{audiobook_url}/download",
         created_at=audiobook.created_at,
         job=_job_response(job) if job else None,
     )
@@ -123,19 +79,33 @@ def _get_job_for_audiobook(db: Session, audiobook_id: uuid.UUID) -> ProcessingJo
     return db.execute(select(ProcessingJob).where(ProcessingJob.audiobook_id == audiobook_id)).scalar_one_or_none()
 
 
-@router.post("/upload", response_model=UploadAudiobookResponse, status_code=201)
-def upload_audiobook(file: UploadFile = File(...), db: Session = Depends(get_db)) -> UploadAudiobookResponse:
-    result = handle_upload(db, file)
+def _upload_response(result) -> UploadAudiobookResponse:
     return UploadAudiobookResponse(
         audiobook_id=result.audiobook_id,
         original_filename=result.original_filename,
-        stored_path=result.stored_path,
         file_size_bytes=result.file_size_bytes,
         checksum_sha256=result.checksum_sha256,
         job_id=result.job_id,
         job_state=result.job_state,
         queue_position=getattr(result, "queue_position", None),
+        download_url=f"/audiobooks/{result.audiobook_id}/download",
     )
+
+
+@router.post("", response_model=UploadAudiobookResponse, status_code=status.HTTP_201_CREATED)
+def create_audiobook(
+    response: Response,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> UploadAudiobookResponse:
+    result = handle_upload(db, file)
+    response.headers["Location"] = f"/audiobooks/{result.audiobook_id}"
+    return _upload_response(result)
+
+
+@router.post("/upload", response_model=UploadAudiobookResponse, status_code=status.HTTP_201_CREATED)
+def upload_audiobook(file: UploadFile = File(...), db: Session = Depends(get_db)) -> UploadAudiobookResponse:
+    return _upload_response(handle_upload(db, file))
 
 
 @router.get("/{audiobook_id}", response_model=AudiobookResponse)
@@ -262,13 +232,13 @@ def download_audiobook(audiobook_id: uuid.UUID, db: Session = Depends(get_db)) -
 def list_audiobooks(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
-    state: str | None = None,
+    state: JobState | None = None,
     db: Session = Depends(get_db),
 ) -> AudiobookListResponse:
     offset = (page - 1) * page_size
     stmt = select(Audiobook, ProcessingJob).join(ProcessingJob, ProcessingJob.audiobook_id == Audiobook.id)
     if state:
-        stmt = stmt.where(ProcessingJob.state == state)
+        stmt = stmt.where(ProcessingJob.state == state.value)
     stmt = stmt.order_by(Audiobook.created_at.desc()).offset(offset).limit(page_size)
 
     rows = db.execute(stmt).all()

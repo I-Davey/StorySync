@@ -128,16 +128,16 @@ def test_e2e_live_upload_then_fetch_job_and_audiobook(
 
     with httpx.Client(timeout=10.0) as client:
         upload_response = client.post(
-            f"{base_url}/audiobooks/upload",
+            f"{base_url}/audiobooks",
             files={"file": ("live-flow.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
         )
         assert upload_response.status_code == 201
 
         uploaded = upload_response.json()
-        stored_path = Path(uploaded["stored_path"])
-        assert stored_path.exists()
-        assert stored_path.parent == audio_dir
-        assert stored_path.read_bytes() == generated_m4b_payload
+        assert upload_response.headers["location"] == f"/audiobooks/{uploaded['audiobook_id']}"
+        assert uploaded["download_url"] == f"/audiobooks/{uploaded['audiobook_id']}/download"
+        assert "stored_path" not in uploaded
+        assert len(list(audio_dir.glob("*.m4b"))) == 1
 
         job_response = client.get(f"{base_url}/jobs/{uploaded['job_id']}")
         assert job_response.status_code == 200
@@ -147,6 +147,12 @@ def test_e2e_live_upload_then_fetch_job_and_audiobook(
         assert audiobook_response.status_code == 200
         audiobook = audiobook_response.json()
         assert audiobook["original_filename"] == "live-flow.m4b"
+        assert audiobook["download_url"] == f"/audiobooks/{uploaded['audiobook_id']}/download"
+        assert audiobook["cover"] is None
+        assert "stored_path" not in audiobook
+        assert "cover_path" not in audiobook
+        assert "metadata_title" not in audiobook
+        assert audiobook["metadata"]["title"] is None
         assert audiobook["job"]["id"] == uploaded["job_id"]
         assert audiobook["job"]["state"] == "queued"
 
@@ -197,8 +203,8 @@ def test_e2e_live_patch_reprocess_download_and_delete_audiobook(
         assert upload_response.status_code == 201
         uploaded = upload_response.json()
         audiobook_id = uploaded["audiobook_id"]
-        stored_path = Path(uploaded["stored_path"])
-        assert stored_path.exists()
+        assert "stored_path" not in uploaded
+        assert len(list(Path(_audio_dir).glob("*.m4b"))) == 1
 
         patch_response = client.patch(
             f"{base_url}/audiobooks/{audiobook_id}",
@@ -210,10 +216,12 @@ def test_e2e_live_patch_reprocess_download_and_delete_audiobook(
         )
         assert patch_response.status_code == 200
         patched = patch_response.json()
-        assert patched["metadata_title"] == "Manual Title"
-        assert patched["metadata_artist"] == "Manual Artist"
-        assert patched["metadata_year"] == 2026
-        assert patched["metadata_album"] is None
+        assert patched["metadata"]["title"] == "Manual Title"
+        assert patched["metadata"]["artist"] == "Manual Artist"
+        assert patched["metadata"]["year"] == 2026
+        assert patched["metadata"]["album"] is None
+        assert "stored_path" not in patched
+        assert "cover_path" not in patched
         assert patched["job"]["id"] == uploaded["job_id"]
 
         download_response = client.get(f"{base_url}/audiobooks/{audiobook_id}/download")
@@ -236,13 +244,13 @@ def test_e2e_live_patch_reprocess_download_and_delete_audiobook(
         cleared_response = client.get(f"{base_url}/audiobooks/{audiobook_id}")
         assert cleared_response.status_code == 200
         cleared = cleared_response.json()
-        assert cleared["metadata_title"] is None
-        assert cleared["metadata_artist"] is None
-        assert cleared["metadata_year"] is None
+        assert cleared["metadata"]["title"] is None
+        assert cleared["metadata"]["artist"] is None
+        assert cleared["metadata"]["year"] is None
 
         delete_response = client.delete(f"{base_url}/audiobooks/{audiobook_id}")
         assert delete_response.status_code == 204
-        assert not stored_path.exists()
+        assert list(Path(_audio_dir).glob("*.m4b")) == []
 
         missing_response = client.get(f"{base_url}/audiobooks/{audiobook_id}")
         assert missing_response.status_code == 404
@@ -361,6 +369,11 @@ def test_e2e_live_cover_upload_get_and_delete(
         assert cover_response.status_code == 200
         cover_payload = cover_response.json()
         assert cover_payload["id"] == audiobook_id
+        assert cover_payload["cover"] == {
+            "url": f"/audiobooks/{audiobook_id}/cover",
+            "media_type": "image/png",
+        }
+        assert "cover_path" not in cover_payload
 
         cover_path = audio_dir / "covers" / f"{audiobook_id}.png"
         assert cover_path.exists()

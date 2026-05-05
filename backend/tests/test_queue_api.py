@@ -12,6 +12,7 @@ from app.db import get_db
 from app.main import app
 from app.api.audiobooks import list_audiobooks
 from app.api.jobs import cancel_job, get_job, list_jobs, retry_job
+from app.schemas import JobState
 
 
 class _DummyDB:
@@ -86,7 +87,7 @@ def test_list_jobs_endpoint_returns_filtered_page() -> None:
     job = _job("queued", 5)
     db = _DummyDB(list_rows=[(job,)])
 
-    response = list_jobs(page=1, page_size=10, state="queued", db=db)
+    response = list_jobs(page=1, page_size=10, state=JobState.queued, db=db)
 
     assert response.page == 1
     assert response.page_size == 10
@@ -189,11 +190,16 @@ def test_list_audiobooks_supports_state_filter_query_param() -> None:
     )
     db = _DummyDB(list_rows=[(audiobook, job)])
 
-    response = list_audiobooks(page=1, page_size=10, state="queued", db=db)
+    response = list_audiobooks(page=1, page_size=10, state=JobState.queued, db=db)
 
     assert response.page == 1
     assert response.items[0].job is not None
     assert response.items[0].job.state == "queued"
+    assert response.items[0].metadata.title == "My Book"
+    assert response.items[0].download_url == f"/audiobooks/{audiobook_id}/download"
+    assert response.items[0].cover is None
+    assert not hasattr(response.items[0], "stored_path")
+    assert not hasattr(response.items[0], "cover_path")
 
 
 def test_list_pagination_query_bounds_are_enforced(monkeypatch) -> None:
@@ -207,6 +213,8 @@ def test_list_pagination_query_bounds_are_enforced(monkeypatch) -> None:
             audiobook_bad_page_size = client.get("/audiobooks", params={"page_size": 101})
             jobs_bad_page = client.get("/jobs", params={"page": 0})
             jobs_bad_page_size = client.get("/jobs", params={"page_size": 0})
+            audiobook_bad_state = client.get("/audiobooks", params={"state": "bogus"})
+            jobs_bad_state = client.get("/jobs", params={"state": "bogus"})
     finally:
         app.dependency_overrides.clear()
 
@@ -214,3 +222,5 @@ def test_list_pagination_query_bounds_are_enforced(monkeypatch) -> None:
     assert audiobook_bad_page_size.status_code == 422
     assert jobs_bad_page.status_code == 422
     assert jobs_bad_page_size.status_code == 422
+    assert audiobook_bad_state.status_code == 422
+    assert jobs_bad_state.status_code == 422

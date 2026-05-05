@@ -1,35 +1,17 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import ProcessingJob
+from app.schemas import JobListResponse, JobResponse, JobState
 from app.services.queue import next_queue_position
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
-
-
-class JobResponse(BaseModel):
-    id: uuid.UUID
-    audiobook_id: uuid.UUID
-    state: str
-    queue_position: int | None
-    attempt_count: int
-    worker_id: str | None = None
-    lease_expires_at: datetime | None = None
-    last_error: str | None = None
-
-
-class JobListResponse(BaseModel):
-    items: list[JobResponse]
-    page: int
-    page_size: int
 
 
 def _job_response(job: ProcessingJob) -> JobResponse:
@@ -56,12 +38,12 @@ def _get_job_or_404(db: Session, job_id: uuid.UUID) -> ProcessingJob:
 def list_jobs(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
-    state: str | None = None,
+    state: JobState | None = None,
     db: Session = Depends(get_db),
 ) -> JobListResponse:
     stmt = select(ProcessingJob)
     if state:
-        stmt = stmt.where(ProcessingJob.state == state)
+        stmt = stmt.where(ProcessingJob.state == state.value)
     stmt = stmt.order_by(ProcessingJob.created_at.desc(), ProcessingJob.id.asc()).offset((page - 1) * page_size).limit(page_size)
 
     jobs = db.execute(stmt).scalars().all()
