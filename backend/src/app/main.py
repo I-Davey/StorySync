@@ -3,17 +3,22 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
+from app.api.auth import router as auth_router
 from app.api.audiobooks import router as audiobooks_router
 from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
 from app.config import settings
+from app.db import SessionLocal
 from app.schema_init import initialize_schema
+from app.services.auth import bootstrap_first_admin
 from app.services.processor import start_processor_thread
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     initialize_schema()
+    with SessionLocal() as db:
+        bootstrap_first_admin(db)
     if settings.processor_enabled:
         thread, stop_event = start_processor_thread()
         app.state.processor_thread = thread
@@ -33,5 +38,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="StorySync Backend", lifespan=lifespan)
 app.include_router(health_router)
+app.include_router(auth_router)
 app.include_router(audiobooks_router)
 app.include_router(jobs_router)

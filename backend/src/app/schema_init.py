@@ -4,8 +4,8 @@ from sqlalchemy.dialects.postgresql import insert
 from app.db import engine
 from app.models import AppMeta, Base
 
-SCHEMA_VERSION = "9"
-SCHEMA_INIT_LOCK_KEY = 2026050509
+SCHEMA_VERSION = "10"
+SCHEMA_INIT_LOCK_KEY = 2026050510
 
 
 def _drop_constraint_sql(table: str, name: str) -> str:
@@ -40,6 +40,17 @@ def initialize_schema() -> None:
             ),
             ("audiobooks", "ck_audiobooks_file_size_nonnegative", "file_size_bytes >= 0"),
             ("audiobooks", "ck_audiobooks_checksum_length", "length(checksum_sha256) = 64"),
+            ("users", "ck_users_email_lowercase", "email = lower(email)"),
+            (
+                "user_audiobook_progress",
+                "ck_user_audiobook_progress_position_nonnegative",
+                "position_seconds >= 0",
+            ),
+            (
+                "user_audiobook_progress",
+                "ck_user_audiobook_progress_completed_at",
+                "completed = false OR completed_at IS NOT NULL",
+            ),
         ]
         for table, name, check_sql in constraints:
             connection.execute(text(_drop_constraint_sql(table, name)))
