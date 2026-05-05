@@ -41,3 +41,28 @@ The compose stack uses:
 - PostgreSQL 16 Alpine
 - FastAPI backend on port `8000`
 - persistent Docker volumes for Postgres data and uploaded audio
+
+## Current API surface
+
+Core endpoints:
+
+- `GET /health`
+- `POST /audiobooks/upload`
+- `GET /audiobooks`
+- `GET /audiobooks/{audiobook_id}`
+- `PATCH /audiobooks/{audiobook_id}`
+- `DELETE /audiobooks/{audiobook_id}`
+- `POST /audiobooks/{audiobook_id}/reprocess`
+- `GET /audiobooks/{audiobook_id}/download`
+- `POST /audiobooks/{audiobook_id}/cover`
+- `GET /audiobooks/{audiobook_id}/cover`
+- `DELETE /audiobooks/{audiobook_id}/cover`
+- `GET /jobs`
+- `GET /jobs/{job_id}`
+- `POST /jobs/{job_id}/cancel`
+- `POST /jobs/{job_id}/retry`
+
+Not implemented yet:
+
+- streaming/range playback endpoints
+- progress tracking endpoints
