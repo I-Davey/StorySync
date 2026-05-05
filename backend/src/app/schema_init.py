@@ -4,7 +4,7 @@ from sqlalchemy.dialects.postgresql import insert
 from app.db import engine
 from app.models import AppMeta, Base
 
-SCHEMA_VERSION = "10"
+SCHEMA_VERSION = "11"
 SCHEMA_INIT_LOCK_KEY = 2026050510
 
 
@@ -20,6 +20,8 @@ def initialize_schema() -> None:
     with engine.begin() as connection:
         connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": SCHEMA_INIT_LOCK_KEY})
         Base.metadata.create_all(bind=connection)
+
+        connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT"))
 
         connection.execute(text("ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS cover_path TEXT"))
         connection.execute(text("ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS cover_media_type VARCHAR(64)"))
