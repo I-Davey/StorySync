@@ -50,7 +50,7 @@ class ProcessingJob(Base):
     __tablename__ = "processing_jobs"
     __table_args__ = (
         CheckConstraint(
-            "state IN ('received', 'queued', 'processing', 'processed', 'failed')",
+            "state IN ('received', 'queued', 'processing', 'processed', 'failed', 'cancelled')",
             name="ck_processing_jobs_state",
         ),
         Index("idx_processing_jobs_state_queue", "state", "queue_position"),

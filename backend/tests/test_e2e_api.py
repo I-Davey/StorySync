@@ -269,6 +269,71 @@ def test_e2e_live_lifecycle_missing_audiobook_returns_404(live_backend_server) -
         assert delete_response.status_code == 404
 
 
+def test_e2e_live_job_admin_list_cancel_retry_errors(
+    live_backend_server,
+    postgres_ready: str,
+    generated_m4b_payload: bytes,
+) -> None:
+    base_url, _audio_dir = live_backend_server
+    missing_id = "00000000-0000-0000-0000-000000000404"
+
+    with httpx.Client(timeout=10.0) as client:
+        upload_response = client.post(
+            f"{base_url}/audiobooks/upload",
+            files={"file": ("job-admin-flow.m4b", BytesIO(generated_m4b_payload), "audio/x-m4b")},
+        )
+        assert upload_response.status_code == 201
+        uploaded = upload_response.json()
+        job_id = uploaded["job_id"]
+
+        list_queued_response = client.get(f"{base_url}/jobs", params={"state": "queued", "page": 1, "page_size": 10})
+        assert list_queued_response.status_code == 200
+        queued_list = list_queued_response.json()
+        assert queued_list["page"] == 1
+        assert queued_list["page_size"] == 10
+        assert [item["id"] for item in queued_list["items"]] == [job_id]
+
+        retry_queued_response = client.post(f"{base_url}/jobs/{job_id}/retry")
+        assert retry_queued_response.status_code == 409
+
+        cancel_response = client.post(f"{base_url}/jobs/{job_id}/cancel")
+        assert cancel_response.status_code == 200
+        cancelled = cancel_response.json()
+        assert cancelled["state"] == "cancelled"
+        assert cancelled["queue_position"] is None
+        assert cancelled["worker_id"] is None
+        assert cancelled["lease_expires_at"] is None
+
+        list_cancelled_response = client.get(f"{base_url}/jobs", params={"state": "cancelled"})
+        assert list_cancelled_response.status_code == 200
+        cancelled_list = list_cancelled_response.json()
+        assert [item["id"] for item in cancelled_list["items"]] == [job_id]
+
+        retry_response = client.post(f"{base_url}/jobs/{job_id}/retry")
+        assert retry_response.status_code == 200
+        retried = retry_response.json()
+        assert retried["state"] == "queued"
+        assert retried["queue_position"] is not None
+        assert retried["last_error"] is None
+        assert retried["worker_id"] is None
+        assert retried["lease_expires_at"] is None
+
+        retry_missing_response = client.post(f"{base_url}/jobs/{missing_id}/retry")
+        assert retry_missing_response.status_code == 404
+        cancel_missing_response = client.post(f"{base_url}/jobs/{missing_id}/cancel")
+        assert cancel_missing_response.status_code == 404
+
+        with psycopg.connect(postgres_ready.replace("postgresql+psycopg://", "postgresql://")) as conn:
+            conn.execute(
+                "UPDATE processing_jobs SET state = 'processed', queue_position = NULL WHERE id = %s",
+                (job_id,),
+            )
+            conn.commit()
+
+        cancel_processed_response = client.post(f"{base_url}/jobs/{job_id}/cancel")
+        assert cancel_processed_response.status_code == 409
+
+
 def test_e2e_live_cover_upload_get_and_delete(
     live_backend_server,
     generated_m4b_payload: bytes,
